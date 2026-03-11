@@ -36,7 +36,7 @@ class ItemCreate(BaseModel):
     category: str = Field(min_length=1, max_length=100)
     # Metal items
     metal_id: int | None = None
-    purity_karat: float | None = Field(default=None, gt=0, le=24)
+    purity_karat: float | None = Field(default=None, gt=0, le=1_000)
     weight_grams: float | None = Field(default=None, gt=0, le=100_000)
     quantity: int = Field(default=1, ge=1, le=100_000)
     price_multiplier: float | None = Field(default=1.0, gt=0, le=1_000)
@@ -53,7 +53,7 @@ class ItemCreate(BaseModel):
 class ItemUpdate(BaseModel):
     category: str | None = Field(default=None, min_length=1, max_length=100)
     metal_id: int | None = None
-    purity_karat: float | None = Field(default=None, gt=0, le=24)
+    purity_karat: float | None = Field(default=None, gt=0, le=1_000)
     weight_grams: float | None = Field(default=None, gt=0, le=100_000)
     quantity: int | None = Field(default=None, ge=1, le=100_000)
     price_multiplier: float | None = Field(default=None, gt=0, le=1_000)
