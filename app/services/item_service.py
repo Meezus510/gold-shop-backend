@@ -3,10 +3,11 @@ from typing import List
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.models.item_image_model import ItemImage
 from app.models.item_model import Item, ItemStatus
 from app.models.item_translation_model import ItemTranslation
 from app.models.metal_model import Metal
-from app.schemas.item_schema import ItemCreate, ItemUpdate, ItemPublicOut
+from app.schemas.item_schema import ItemCreate, ItemUpdate, ItemPublicOut, UnitAdjust
 from app.schemas.translation_schema import TranslationCreate
 from app.services.pricing_service import calculate_item_price
 
@@ -21,7 +22,6 @@ def _get_item_or_404(db: Session, item_id: int) -> Item:
 
 
 def _resolve_translation(item: Item, lang: str) -> dict:
-    """Pick the requested language, fall back to 'en', then first available."""
     translation = next((t for t in item.translations if t.language == lang), None)
     if not translation:
         translation = next((t for t in item.translations if t.language == "en"), None)
@@ -48,11 +48,14 @@ def _upsert_translations(db: Session, item: Item, translations: List[Translation
             ))
 
 
+def _replace_images(db: Session, item: Item, urls: List[str]):
+    """Delete all existing images for the item and insert the new ordered list."""
+    db.query(ItemImage).filter(ItemImage.item_id == item.item_id).delete()
+    for position, url in enumerate(urls):
+        db.add(ItemImage(item_id=item.item_id, url=url, position=position))
+
+
 def _calculate_metal_price(db: Session, item: Item) -> float | None:
-    """
-    Auto-calculates price for metal items.
-    Returns None if metal info is incomplete or spot price fetch fails.
-    """
     if not item.metal_id or item.purity_karat is None or not item.weight_grams or not item.price_multiplier:
         return None
     metal = db.query(Metal).filter(Metal.id == item.metal_id).first()
@@ -64,18 +67,32 @@ def _calculate_metal_price(db: Session, item: Item) -> float | None:
         purity_karat=item.purity_karat,
         purity_denominator=metal.purity_denominator,
         price_multiplier=item.price_multiplier,
+        flat_markup=item.flat_markup or 0.0,
     )
+
+
+def _recompute_status(item: Item) -> None:
+    """Derive item status from unit counters. Always call after mutating counters."""
+    if item.quantity_available > 0:
+        item.status = ItemStatus.AVAILABLE
+    elif item.quantity_pending > 0:
+        item.status = ItemStatus.SALE_PENDING
+    else:
+        item.status = ItemStatus.SOLD
+
+
+def _primary_image_url(item: Item) -> str | None:
+    return item.images[0].url if item.images else None
+
+
+def _image_url_list(item: Item) -> List[str]:
+    return [img.url for img in item.images]
 
 
 # ── Public ────────────────────────────────────────────────────────────────────
 
 def get_public_items(db: Session, lang: str) -> List[ItemPublicOut]:
-    """Returns all items (all statuses) — frontend displays status badges."""
-    items = (
-        db.query(Item)
-        .order_by(Item.created_at.desc())
-        .all()
-    )
+    items = db.query(Item).order_by(Item.created_at.desc()).all()
     result = []
     for item in items:
         t = _resolve_translation(item, lang)
@@ -86,7 +103,8 @@ def get_public_items(db: Session, lang: str) -> List[ItemPublicOut]:
             category=item.category,
             weight_grams=item.weight_grams,
             price=item.price,
-            image_url=item.image_url,
+            image_url=_primary_image_url(item),
+            images=_image_url_list(item),
             status=item.status,
             metal=item.metal,
             purity_karat=item.purity_karat,
@@ -104,7 +122,8 @@ def get_public_item(db: Session, item_id: int, lang: str) -> ItemPublicOut:
         category=item.category,
         weight_grams=item.weight_grams,
         price=item.price,
-        image_url=item.image_url,
+        image_url=_primary_image_url(item),
+        images=_image_url_list(item),
         status=item.status,
         metal=item.metal,
         purity_karat=item.purity_karat,
@@ -119,19 +138,25 @@ def create_item(db: Session, data: ItemCreate) -> Item:
         metal_id=data.metal_id,
         purity_karat=data.purity_karat,
         weight_grams=data.weight_grams,
+        quantity=data.quantity,
+        quantity_available=data.quantity,   # all units start as available
+        quantity_pending=0,
+        quantity_sold=0,
         cost=data.cost,
-        price=data.price,           # may be overwritten below for metal items
+        price=data.price,
         price_multiplier=data.price_multiplier,
-        image_url=data.image_url,
+        flat_markup=data.flat_markup,
+        purchase_location_id=data.purchase_location_id,
     )
     db.add(item)
-    db.flush()  # get item_id before adding translations
+    db.flush()  # get item_id
 
-    # Auto-calculate price for metal items (overrides manual price)
     if data.metal_id:
         calculated = _calculate_metal_price(db, item)
         if calculated is not None:
             item.price = calculated
+        elif data.price is not None:
+            item.price = data.price
 
     for t_data in data.translations:
         db.add(ItemTranslation(
@@ -140,6 +165,10 @@ def create_item(db: Session, data: ItemCreate) -> Item:
             name=t_data.name,
             description=t_data.description,
         ))
+
+    for position, url in enumerate(data.image_urls):
+        db.add(ItemImage(item_id=item.item_id, url=url, position=position))
+
     db.commit()
     db.refresh(item)
     return item
@@ -149,37 +178,49 @@ def update_item(db: Session, item_id: int, data: ItemUpdate) -> Item:
     item = _get_item_or_404(db, item_id)
     if data.category is not None:
         item.category = data.category
-    if data.metal_id is not None:
-        item.metal_id = data.metal_id
+    # Always apply metal_id so frontend can clear it by sending null (N/A)
+    item.metal_id = data.metal_id
     if data.purity_karat is not None:
         item.purity_karat = data.purity_karat
     if data.weight_grams is not None:
         item.weight_grams = data.weight_grams
     if data.price_multiplier is not None:
         item.price_multiplier = data.price_multiplier
+    if data.flat_markup is not None:
+        item.flat_markup = data.flat_markup
+    if data.quantity is not None and data.quantity != item.quantity:
+        delta = data.quantity - item.quantity
+        item.quantity = data.quantity
+        # Extra units (restock) go to available; reductions subtract from available first
+        item.quantity_available = max(0, item.quantity_available + delta)
+        _recompute_status(item)
+    # Always apply purchase_location_id so the frontend can clear it by sending null
+    item.purchase_location_id = data.purchase_location_id
     if data.cost is not None:
         item.cost = data.cost
     if data.sell_price is not None:
         item.sell_price = data.sell_price
-    if data.image_url is not None:
-        item.image_url = data.image_url
     if data.status is not None:
         item.status = data.status
 
-    # Recalculate price for metal items when relevant fields change
-    metal_fields_changed = any([
-        data.metal_id, data.purity_karat, data.weight_grams, data.price_multiplier
-    ])
+    metal_fields_changed = any([data.metal_id, data.purity_karat, data.weight_grams, data.price_multiplier])
     if item.metal_id and metal_fields_changed:
         calculated = _calculate_metal_price(db, item)
         if calculated is not None:
             item.price = calculated
+        elif data.price is not None:
+            # Backend spot price unavailable — use frontend-calculated price as fallback
+            item.price = data.price
     elif data.price is not None and not item.metal_id:
-        # Manual price for non-metal items
         item.price = data.price
 
     if data.translations is not None:
         _upsert_translations(db, item, data.translations)
+
+    # image_urls=None → don't touch; image_urls=[] → clear all; image_urls=[...] → replace
+    if data.image_urls is not None:
+        _replace_images(db, item, data.image_urls)
+
     db.commit()
     db.refresh(item)
     return item
@@ -193,9 +234,44 @@ def delete_item(db: Session, item_id: int) -> None:
 
 def update_item_status(db: Session, item_id: int, new_status: ItemStatus, sell_price: float | None = None) -> Item:
     item = _get_item_or_404(db, item_id)
+    # Remap the unit counters to match the requested status (safe for qty=1; for multi-unit use adjust_units)
+    if new_status == ItemStatus.AVAILABLE:
+        item.quantity_available, item.quantity_pending, item.quantity_sold = item.quantity, 0, 0
+    elif new_status == ItemStatus.SALE_PENDING:
+        item.quantity_available, item.quantity_pending, item.quantity_sold = 0, item.quantity, 0
+    else:  # SOLD
+        item.quantity_available, item.quantity_pending, item.quantity_sold = 0, 0, item.quantity
     item.status = new_status
     if sell_price is not None:
         item.sell_price = sell_price
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+def adjust_units(db: Session, item_id: int, data: UnitAdjust) -> Item:
+    """Atomically move `data.units` items between available / pending / sold buckets."""
+    item = _get_item_or_404(db, item_id)
+
+    counter = {
+        "available": "quantity_available",
+        "pending":   "quantity_pending",
+        "sold":      "quantity_sold",
+    }
+    src_attr = counter[data.from_state]
+    dst_attr = counter[data.to_state]
+
+    src_count = getattr(item, src_attr)
+    if src_count < data.units:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Only {src_count} unit(s) in '{data.from_state}' state — cannot move {data.units}",
+        )
+
+    setattr(item, src_attr, src_count - data.units)
+    setattr(item, dst_attr, getattr(item, dst_attr) + data.units)
+    _recompute_status(item)
+
     db.commit()
     db.refresh(item)
     return item

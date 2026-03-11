@@ -11,6 +11,8 @@ from app.schemas.metal_schema import MetalCreate, MetalOut, MetalSpotPrice, Meta
 from app.services.auth_service import get_current_admin
 from app.services.metals_price_service import get_spot_price
 from app.services.pricing_service import calculate_item_price
+from app.services import price_sync_service, scheduler_service
+from app.models.price_sync_model import PriceSyncConfig
 
 router = APIRouter(prefix="/metals", tags=["Metals"])
 
@@ -129,6 +131,7 @@ def recalculate_metal_prices(
                 purity_karat=item.purity_karat,
                 purity_denominator=metal.purity_denominator,
                 price_multiplier=item.price_multiplier,
+                flat_markup=item.flat_markup or 0.0,
             )
             updated += 1
         else:
@@ -148,46 +151,31 @@ def recalculate_all_metal_prices(
     db: Session = Depends(get_db),
     _: Admin = Depends(get_current_admin),
 ):
-    """Recalculates prices for ALL metal items across all metals."""
-    metals = db.query(Metal).all()
-    total_updated = 0
-    total_skipped = 0
-    results = []
-
-    for metal in metals:
-        spot_price = get_spot_price(metal.spot_price_api_symbol)
-        if spot_price is None:
-            results.append({"metal": metal.name, "error": "Could not fetch spot price"})
-            continue
-
-        items = db.query(Item).filter(Item.metal_id == metal.id).all()
-        updated = 0
-        skipped = 0
-        for item in items:
-            if item.weight_grams and item.purity_karat and item.price_multiplier:
-                item.price = calculate_item_price(
-                    api_symbol=metal.spot_price_api_symbol,
-                    weight_grams=item.weight_grams,
-                    purity_karat=item.purity_karat,
-                    purity_denominator=metal.purity_denominator,
-                    price_multiplier=item.price_multiplier,
-                )
-                updated += 1
-            else:
-                skipped += 1
-
-        total_updated += updated
-        total_skipped += skipped
-        results.append({
-            "metal": metal.name,
-            "spot_price_used": spot_price,
-            "updated_items": updated,
-            "skipped_items": skipped,
-        })
-
-    db.commit()
+    """Recalculates prices for ALL metal items, then resets the weekly auto-sync countdown."""
+    from datetime import datetime, timedelta, timezone
+    result = price_sync_service.recalculate_all(db, force_fresh_prices=True)
+    next_sync = datetime.now(timezone.utc) + timedelta(days=price_sync_service.SYNC_INTERVAL_DAYS)
+    price_sync_service.record_sync(db, result["updated"], next_sync)
+    scheduler_service.reset_schedule(db, next_sync)
     return {
-        "total_updated": total_updated,
-        "total_skipped": total_skipped,
-        "details": results,
+        "total_updated": result["updated"],
+        "total_skipped": result["skipped"],
+        "errors":        result["errors"],
+        "next_sync_at":  next_sync.isoformat(),
+    }
+
+
+@router.get("/price-sync-status")
+def price_sync_status(
+    db: Session = Depends(get_db),
+    _: Admin = Depends(get_current_admin),
+):
+    """Returns last/next sync times and the scheduler's live next_run_time."""
+    config = price_sync_service.get_or_create_config(db)
+    next_run = scheduler_service.get_next_run_time()
+    return {
+        "last_sync_at":       config.last_sync_at.isoformat() if config.last_sync_at else None,
+        "next_sync_at":       (next_run or config.next_sync_at or None) and
+                              (next_run or config.next_sync_at).isoformat(),
+        "last_items_updated": config.last_items_updated,
     }

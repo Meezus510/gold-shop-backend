@@ -4,6 +4,7 @@ services:
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -15,6 +16,10 @@ services:
         value: HS256
       - key: ACCESS_TOKEN_EXPIRE_HOURS
         value: "24"
+      # Set this to your Netlify domain before deploying, e.g.:
+      # value: "https://your-site.netlify.app"
+      - key: ALLOWED_ORIGINS
+        value: "https://your-site.netlify.app"
 
 databases:
   - name: gold-shop-db
