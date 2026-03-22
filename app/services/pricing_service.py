@@ -8,34 +8,37 @@ def calculate_market_rate(
     purity_denominator: int,
 ) -> tuple[float, float] | tuple[None, None]:
     """
-    Returns (spot_price_per_oz, market_rate_usd) or (None, None) on failure.
-    market_rate = (weight_grams / 31.1035) * spot_price * (purity_karat / purity_denominator)
+    Returns (spot_price_per_oz, base_market_price_usd) or (None, None) on failure.
+    base_market_price = (weight_grams / 31.1035) * spot_price * (purity_karat / purity_denominator)
     """
     spot_price = get_spot_price(api_symbol)
     if spot_price is None:
         return None, None
-    weight_oz = weight_grams / GRAMS_PER_TROY_OZ
+    weight_oz    = weight_grams / GRAMS_PER_TROY_OZ
     purity_ratio = purity_karat / purity_denominator
-    market_rate = round(weight_oz * spot_price * purity_ratio, 2)
-    return spot_price, market_rate
+    base_market_price = round(weight_oz * spot_price * purity_ratio, 2)
+    return spot_price, base_market_price
 
 
-def calculate_item_price(
+def compute_listed_prices(
     api_symbol: str,
     weight_grams: float,
     purity_karat: float,
     purity_denominator: int,
-    price_multiplier: float,
-    flat_markup: float = 0.0,
-) -> float | None:
+    markup_flat: float,
+    markup_loan: float,
+) -> tuple[float, float, float] | tuple[None, None, None]:
     """
-    Calculates listing price using current spot price:
-      market_rate   = (weight_grams / 31.1035) * spot_price * (purity_karat / purity_denominator)
-      listing_price = market_rate * price_multiplier + flat_markup
+    Returns (base_market_price, listed_price_flat, listed_price_loan) or (None, None, None).
 
-    Returns None when spot price cannot be fetched.
+    listed_price_flat = base_market_price + markup_flat
+    listed_price_loan = base_market_price + markup_loan
     """
-    _, market_rate = calculate_market_rate(api_symbol, weight_grams, purity_karat, purity_denominator)
-    if market_rate is None:
-        return None
-    return round(market_rate * price_multiplier + (flat_markup or 0.0), 2)
+    _, base_market_price = calculate_market_rate(
+        api_symbol, weight_grams, purity_karat, purity_denominator
+    )
+    if base_market_price is None:
+        return None, None, None
+    listed_flat = round(base_market_price + markup_flat, 2)
+    listed_loan = round(base_market_price + markup_loan, 2)
+    return base_market_price, listed_flat, listed_loan

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.models.admin_model import Admin
 from app.schemas.admin_schema import AdminLogin, TokenOut
-from app.schemas.item_schema import ItemAdminOut, ItemCreate, ItemStatusUpdate, ItemUpdate, UnitAdjust
+from app.schemas.item_schema import ItemAdminOut, ItemCreate, ItemStatusUpdate, ItemUpdate, ItemVisibilityUpdate, UnitAdjust
 from app.services import item_service
 from app.services.auth_service import get_current_admin
 from app.services.cloudinary_service import upload_image
@@ -153,3 +153,13 @@ def admin_update_status(
     _: Admin = Depends(get_current_admin),
 ):
     return item_service.update_item_status(db, item_id, data.status, data.sell_price)
+
+
+@router.patch("/items/{item_id}/visibility", response_model=ItemAdminOut)
+def admin_update_visibility(
+    item_id: int,
+    data: ItemVisibilityUpdate,
+    db: Session = Depends(get_db),
+    _: Admin = Depends(get_current_admin),
+):
+    return item_service.toggle_visibility(db, item_id, data.is_visible)

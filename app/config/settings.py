@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     CLOUDINARY_API_KEY: str = ""
     CLOUDINARY_API_SECRET: str = ""
 
+    # Anthropic — Claude API for batch image parsing and translation
+    ANTHROPIC_API_KEY: str = ""
+
     @field_validator("SECRET_KEY")
     @classmethod
     def secret_key_must_be_strong(cls, v: str) -> str:

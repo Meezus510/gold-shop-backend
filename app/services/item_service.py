@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import List
 
 from fastapi import HTTPException, status
@@ -7,12 +8,12 @@ from app.models.item_image_model import ItemImage
 from app.models.item_model import Item, ItemStatus
 from app.models.item_translation_model import ItemTranslation
 from app.models.metal_model import Metal
-from app.schemas.item_schema import ItemCreate, ItemUpdate, ItemPublicOut, UnitAdjust
+from app.schemas.item_schema import ItemCreate, ItemPublicOut, ItemUpdate, UnitAdjust
 from app.schemas.translation_schema import TranslationCreate
-from app.services.pricing_service import calculate_item_price
+from app.services.pricing_service import compute_listed_prices
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _get_item_or_404(db: Session, item_id: int) -> Item:
     item = db.query(Item).filter(Item.item_id == item_id).first()
@@ -28,7 +29,7 @@ def _resolve_translation(item: Item, lang: str) -> dict:
     if not translation and item.translations:
         translation = item.translations[0]
     return {
-        "name": translation.name if translation else "",
+        "name":        translation.name        if translation else "",
         "description": translation.description if translation else None,
     }
 
@@ -37,7 +38,7 @@ def _upsert_translations(db: Session, item: Item, translations: List[Translation
     existing = {t.language: t for t in item.translations}
     for t_data in translations:
         if t_data.language in existing:
-            existing[t_data.language].name = t_data.name
+            existing[t_data.language].name        = t_data.name
             existing[t_data.language].description = t_data.description
         else:
             db.add(ItemTranslation(
@@ -49,26 +50,32 @@ def _upsert_translations(db: Session, item: Item, translations: List[Translation
 
 
 def _replace_images(db: Session, item: Item, urls: List[str]):
-    """Delete all existing images for the item and insert the new ordered list."""
     db.query(ItemImage).filter(ItemImage.item_id == item.item_id).delete()
     for position, url in enumerate(urls):
         db.add(ItemImage(item_id=item.item_id, url=url, position=position))
 
 
-def _calculate_metal_price(db: Session, item: Item) -> float | None:
-    if not item.metal_id or item.purity_karat is None or not item.weight_grams or not item.price_multiplier:
-        return None
+def _compute_metal_listed_prices(db: Session, item: Item) -> tuple[Decimal | None, Decimal | None]:
+    """
+    Returns (listed_price_flat, listed_price_loan) computed from current spot price + markups.
+    Returns (None, None) if any required field is missing or spot price is unavailable.
+    """
+    if not item.metal_id or item.purity_karat is None or not item.weight_grams:
+        return None, None
+    if item.markup_flat is None:
+        return None, None
     metal = db.query(Metal).filter(Metal.id == item.metal_id).first()
     if not metal:
-        return None
-    return calculate_item_price(
+        return None, None
+    _, listed_flat, listed_loan = compute_listed_prices(
         api_symbol=metal.spot_price_api_symbol,
         weight_grams=item.weight_grams,
         purity_karat=item.purity_karat,
         purity_denominator=metal.purity_denominator,
-        price_multiplier=item.price_multiplier,
-        flat_markup=item.flat_markup or 0.0,
+        markup_flat=float(item.markup_flat),
+        markup_loan=float(item.markup_loan or 0),
     )
+    return listed_flat, listed_loan
 
 
 def _recompute_status(item: Item) -> None:
@@ -92,7 +99,12 @@ def _image_url_list(item: Item) -> List[str]:
 # ── Public ────────────────────────────────────────────────────────────────────
 
 def get_public_items(db: Session, lang: str) -> List[ItemPublicOut]:
-    items = db.query(Item).order_by(Item.created_at.desc()).all()
+    items = (
+        db.query(Item)
+        .filter(Item.is_visible == True)  # noqa: E712
+        .order_by(Item.created_at.desc())
+        .all()
+    )
     result = []
     for item in items:
         t = _resolve_translation(item, lang)
@@ -102,7 +114,9 @@ def get_public_items(db: Session, lang: str) -> List[ItemPublicOut]:
             description=t["description"],
             category=item.category,
             weight_grams=item.weight_grams,
-            price=item.price,
+            listed_price_flat=item.listed_price_flat,
+            listed_price_loan=item.listed_price_loan,
+            price=item.listed_price_flat,   # backward-compat alias
             image_url=_primary_image_url(item),
             images=_image_url_list(item),
             status=item.status,
@@ -114,6 +128,8 @@ def get_public_items(db: Session, lang: str) -> List[ItemPublicOut]:
 
 def get_public_item(db: Session, item_id: int, lang: str) -> ItemPublicOut:
     item = _get_item_or_404(db, item_id)
+    if not item.is_visible:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
     t = _resolve_translation(item, lang)
     return ItemPublicOut(
         item_id=item.item_id,
@@ -121,7 +137,9 @@ def get_public_item(db: Session, item_id: int, lang: str) -> ItemPublicOut:
         description=t["description"],
         category=item.category,
         weight_grams=item.weight_grams,
-        price=item.price,
+        listed_price_flat=item.listed_price_flat,
+        listed_price_loan=item.listed_price_loan,
+        price=item.listed_price_flat,
         image_url=_primary_image_url(item),
         images=_image_url_list(item),
         status=item.status,
@@ -139,24 +157,28 @@ def create_item(db: Session, data: ItemCreate) -> Item:
         purity_karat=data.purity_karat,
         weight_grams=data.weight_grams,
         quantity=data.quantity,
-        quantity_available=data.quantity,   # all units start as available
+        quantity_available=data.quantity,
         quantity_pending=0,
         quantity_sold=0,
         cost=data.cost,
-        price=data.price,
-        price_multiplier=data.price_multiplier,
-        flat_markup=data.flat_markup,
+        purchase_date=data.purchase_date,
         purchase_location_id=data.purchase_location_id,
+        is_visible=data.is_visible,
+        markup_flat=data.markup_flat,
+        markup_loan=data.markup_loan,
+        listed_price_flat=data.listed_price_flat,
+        listed_price_loan=data.listed_price_loan,
     )
     db.add(item)
     db.flush()  # get item_id
 
-    if data.metal_id:
-        calculated = _calculate_metal_price(db, item)
-        if calculated is not None:
-            item.price = calculated
-        elif data.price is not None:
-            item.price = data.price
+    # For metal items, compute listed prices from markups + current spot price
+    if data.metal_id and data.markup_flat is not None:
+        flat, loan = _compute_metal_listed_prices(db, item)
+        if flat is not None:
+            item.listed_price_flat = flat
+        if loan is not None:
+            item.listed_price_loan = loan
 
     for t_data in data.translations:
         db.add(ItemTranslation(
@@ -176,25 +198,30 @@ def create_item(db: Session, data: ItemCreate) -> Item:
 
 def update_item(db: Session, item_id: int, data: ItemUpdate) -> Item:
     item = _get_item_or_404(db, item_id)
+
     if data.category is not None:
         item.category = data.category
-    # Always apply metal_id so frontend can clear it by sending null (N/A)
+    # Always apply metal_id so frontend can clear it by sending null
     item.metal_id = data.metal_id
     if data.purity_karat is not None:
         item.purity_karat = data.purity_karat
     if data.weight_grams is not None:
         item.weight_grams = data.weight_grams
-    if data.price_multiplier is not None:
-        item.price_multiplier = data.price_multiplier
-    if data.flat_markup is not None:
-        item.flat_markup = data.flat_markup
+    if data.purchase_date is not None:
+        item.purchase_date = data.purchase_date
+    if data.markup_flat is not None:
+        item.markup_flat = data.markup_flat
+    if data.markup_loan is not None:
+        item.markup_loan = data.markup_loan
+    if data.listed_price_flat is not None:
+        item.listed_price_flat = data.listed_price_flat
+    if data.listed_price_loan is not None:
+        item.listed_price_loan = data.listed_price_loan
     if data.quantity is not None and data.quantity != item.quantity:
         delta = data.quantity - item.quantity
         item.quantity = data.quantity
-        # Extra units (restock) go to available; reductions subtract from available first
         item.quantity_available = max(0, item.quantity_available + delta)
         _recompute_status(item)
-    # Always apply purchase_location_id so the frontend can clear it by sending null
     item.purchase_location_id = data.purchase_location_id
     if data.cost is not None:
         item.cost = data.cost
@@ -202,22 +229,27 @@ def update_item(db: Session, item_id: int, data: ItemUpdate) -> Item:
         item.sell_price = data.sell_price
     if data.status is not None:
         item.status = data.status
+    if data.is_visible is not None:
+        item.is_visible = data.is_visible
 
-    metal_fields_changed = any([data.metal_id, data.purity_karat, data.weight_grams, data.price_multiplier])
-    if item.metal_id and metal_fields_changed:
-        calculated = _calculate_metal_price(db, item)
-        if calculated is not None:
-            item.price = calculated
-        elif data.price is not None:
-            # Backend spot price unavailable — use frontend-calculated price as fallback
-            item.price = data.price
-    elif data.price is not None and not item.metal_id:
-        item.price = data.price
+    # Recompute listed prices when metal pricing fields change
+    metal_fields_changed = any([
+        data.metal_id is not None,
+        data.purity_karat is not None,
+        data.weight_grams is not None,
+        data.markup_flat is not None,
+        data.markup_loan is not None,
+    ])
+    if item.metal_id and metal_fields_changed and item.markup_flat is not None:
+        flat, loan = _compute_metal_listed_prices(db, item)
+        if flat is not None:
+            item.listed_price_flat = flat
+        if loan is not None:
+            item.listed_price_loan = loan
 
     if data.translations is not None:
         _upsert_translations(db, item, data.translations)
 
-    # image_urls=None → don't touch; image_urls=[] → clear all; image_urls=[...] → replace
     if data.image_urls is not None:
         _replace_images(db, item, data.image_urls)
 
@@ -232,9 +264,13 @@ def delete_item(db: Session, item_id: int) -> None:
     db.commit()
 
 
-def update_item_status(db: Session, item_id: int, new_status: ItemStatus, sell_price: float | None = None) -> Item:
+def update_item_status(
+    db: Session,
+    item_id: int,
+    new_status: ItemStatus,
+    sell_price: float | None = None,
+) -> Item:
     item = _get_item_or_404(db, item_id)
-    # Remap the unit counters to match the requested status (safe for qty=1; for multi-unit use adjust_units)
     if new_status == ItemStatus.AVAILABLE:
         item.quantity_available, item.quantity_pending, item.quantity_sold = item.quantity, 0, 0
     elif new_status == ItemStatus.SALE_PENDING:
@@ -244,6 +280,14 @@ def update_item_status(db: Session, item_id: int, new_status: ItemStatus, sell_p
     item.status = new_status
     if sell_price is not None:
         item.sell_price = sell_price
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+def toggle_visibility(db: Session, item_id: int, is_visible: bool) -> Item:
+    item = _get_item_or_404(db, item_id)
+    item.is_visible = is_visible
     db.commit()
     db.refresh(item)
     return item

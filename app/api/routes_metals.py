@@ -10,7 +10,7 @@ from app.models.metal_model import Metal
 from app.schemas.metal_schema import MetalCreate, MetalOut, MetalSpotPrice, MetalUpdate
 from app.services.auth_service import get_current_admin
 from app.services.metals_price_service import get_spot_price
-from app.services.pricing_service import calculate_item_price
+from app.services.pricing_service import compute_listed_prices
 from app.services import price_sync_service, scheduler_service
 from app.models.price_sync_model import PriceSyncConfig
 
@@ -124,15 +124,19 @@ def recalculate_metal_prices(
     updated = 0
     skipped = 0
     for item in items:
-        if item.weight_grams and item.purity_karat and item.price_multiplier:
-            item.price = calculate_item_price(
+        if item.weight_grams and item.purity_karat and item.markup_flat is not None:
+            _, listed_flat, listed_loan = compute_listed_prices(
                 api_symbol=metal.spot_price_api_symbol,
                 weight_grams=item.weight_grams,
                 purity_karat=item.purity_karat,
                 purity_denominator=metal.purity_denominator,
-                price_multiplier=item.price_multiplier,
-                flat_markup=item.flat_markup or 0.0,
+                markup_flat=float(item.markup_flat),
+                markup_loan=float(item.markup_loan or 0),
             )
+            if listed_flat is not None:
+                item.listed_price_flat = listed_flat
+            if listed_loan is not None:
+                item.listed_price_loan = listed_loan
             updated += 1
         else:
             skipped += 1
