@@ -21,7 +21,12 @@ SUPPORTED_MEDIA_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 VALID_CATEGORIES = {
     "ring", "necklace", "bracelet", "earrings", "pendant",
-    "chain", "bangle", "brooch", "set", "other",
+    "chain", "bangle", "brooch", "set", "other", "broqueles",
+}
+
+# Default weight (grams) applied when a category has no weight info
+CATEGORY_DEFAULT_WEIGHT: dict[str, float] = {
+    "broqueles": 0.2,
 }
 
 
@@ -117,6 +122,81 @@ def extract_rows_from_image(image_bytes: bytes, content_type: str) -> list[dict]
     return rows
 
 
+def extract_rows_from_image_na(image_bytes: bytes, content_type: str) -> list[dict]:
+    """
+    Variant of extract_rows_from_image for non-metal (N/A) purchase sheets.
+    Expects columns: description, cost, price.  No weight or metal columns.
+    """
+    if content_type not in SUPPORTED_MEDIA_TYPES:
+        raise ValueError(f"Unsupported image type: {content_type}")
+
+    b64_data = base64.standard_b64encode(image_bytes).decode()
+
+    prompt = (
+        "Extract the accessories/jewelry inventory table from this image.\n\n"
+        "The sheet header may contain a date (purchase_date) and a supplier name (purchase_location).\n"
+        "Each data row has:\n"
+        "  1. qty + description (e.g. '2- bolsa cafe' or '1- aretes perla')\n"
+        "  2. cost — what was paid\n"
+        "  3. price — the sell/listed price\n\n"
+        "Return a JSON object with:\n"
+        "  'purchase_date': string YYYY-MM-DD from the sheet header, or null\n"
+        "  'purchase_location': supplier name from the sheet header, or null\n"
+        "  'rows': array of row objects, each with:\n"
+        "    - qty: integer (default 1 if not shown)\n"
+        "    - description_es: item description exactly as written\n"
+        "    - cost: number or null\n"
+        "    - listed_price_flat: sell/listed price or null\n\n"
+        "Rules:\n"
+        "- Only extract rows with actual item data — skip blank or illegible rows.\n"
+        "- Use null for any cell that is blank or unreadable.\n"
+        "- Return only valid JSON, no markdown, no explanation."
+    )
+
+    message = _get_client().messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=2048,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": content_type,
+                        "data": b64_data,
+                    },
+                },
+                {"type": "text", "text": prompt},
+            ],
+        }],
+    )
+
+    raw_text = message.content[0].text.strip()
+    if raw_text.startswith("```"):
+        raw_text = raw_text.split("```")[1]
+        if raw_text.startswith("json"):
+            raw_text = raw_text[4:]
+        raw_text = raw_text.strip()
+
+    parsed = json.loads(raw_text)
+
+    if isinstance(parsed, dict):
+        rows = parsed.get("rows", [])
+        sheet_date     = parsed.get("purchase_date")
+        sheet_location = parsed.get("purchase_location")
+        for row in rows:
+            row.setdefault("purchase_date",     sheet_date)
+            row.setdefault("purchase_location", sheet_location)
+    elif isinstance(parsed, list):
+        rows = parsed
+    else:
+        raise ValueError("Claude returned unexpected format")
+
+    logger.info("extract_rows_from_image_na: extracted %d rows", len(rows))
+    return rows
+
+
 def enrich_rows(raw_rows: list[dict]) -> list[dict]:
     """
     Takes raw rows from extract_rows_from_image and enriches each one with:
@@ -144,7 +224,8 @@ def enrich_rows(raw_rows: list[dict]) -> list[dict]:
         "- description_es: 1–2 sentence description in Spanish, expanding naturally on the name\n"
         "- name_en: English translation of name_es\n"
         "- description_en: English translation of description_es\n"
-        f"- category: one of {sorted(VALID_CATEGORIES)}\n\n"
+        f"- category: one of {sorted(VALID_CATEGORIES)} "
+        "(use 'broqueles' for small gold stud earrings typical of Latin American jewelry shops)\n\n"
         f"Raw entries (in order):\n{entries}\n\n"
         "Return only a valid JSON array, no markdown, no explanation."
     )

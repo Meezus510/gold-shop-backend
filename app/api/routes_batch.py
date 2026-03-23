@@ -1,7 +1,7 @@
 import logging
 from typing import List
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
@@ -22,6 +22,7 @@ MAX_SIZE_BYTES = 20 * 1024 * 1024  # 20 MB — purchase sheets can be large phot
 @router.post("/parse-batch-image", response_model=BatchParseResponse)
 async def parse_batch_image(
     file: UploadFile = File(...),
+    batch_type: str = Form(default="metal"),
     _: Admin = Depends(get_current_admin),
 ):
     """
@@ -46,6 +47,7 @@ async def parse_batch_image(
             image_bytes=contents,
             content_type=file.content_type,
             filename=file.filename or "batch-upload",
+            batch_type=batch_type,
         )
     except ValueError as exc:
         logger.warning("parse_batch_image failed: %s", exc)
