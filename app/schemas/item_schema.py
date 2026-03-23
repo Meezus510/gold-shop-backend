@@ -43,7 +43,7 @@ class ItemCreate(BaseModel):
     cost:         float | None = Field(default=None, ge=0)
     purchase_date: date | None = None
     purchase_location_id: int | None = None
-    is_visible: bool = True
+    is_visible: bool = False
 
     # Metal items: provide markups — listed prices are computed from spot price + markup
     markup_flat: Decimal | None = Field(default=None, ge=0)

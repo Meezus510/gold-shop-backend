@@ -49,6 +49,7 @@ class BatchRowCreate(BaseModel):
 
 class BatchCreate(BaseModel):
     """Full payload for POST /admin/items/batch."""
-    metal_id:     int
-    purity_karat: float = Field(gt=0, le=1_000)
+    batch_type:   str   = "metal"          # "metal" | "na"
+    metal_id:     int   | None = None
+    purity_karat: float | None = Field(default=None, gt=0, le=1_000)
     rows:         List[BatchRowCreate] = Field(min_length=1)

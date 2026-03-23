@@ -23,6 +23,7 @@ def parse_batch_image(
     image_bytes: bytes,
     content_type: str,
     filename: str,
+    batch_type: str = "metal",
 ) -> BatchParseResponse:
     """
     Upload image to Cloudinary, extract rows via Claude Vision,
@@ -32,11 +33,23 @@ def parse_batch_image(
     # Upload source image to Cloudinary for audit trail
     source_url = upload_image(image_bytes, f"batch-source-{filename}")
 
-    # Step 1: OCR extraction
-    raw_rows = claude_service.extract_rows_from_image(image_bytes, content_type)
+    # Step 1: OCR extraction — use appropriate prompt based on batch type
+    if batch_type == "na":
+        raw_rows = claude_service.extract_rows_from_image_na(image_bytes, content_type)
+    else:
+        raw_rows = claude_service.extract_rows_from_image(image_bytes, content_type)
 
     # Step 2: Enrich with name/description (ES + EN) and category
     enriched_rows = claude_service.enrich_rows(raw_rows)
+
+    # Step 3: Apply category-based weight defaults for rows missing weight (metal batches only)
+    if batch_type != "na":
+        for row in enriched_rows:
+            if not row.get("weight_grams"):
+                cat = (row.get("category") or "").lower()
+                default_w = claude_service.CATEGORY_DEFAULT_WEIGHT.get(cat)
+                if default_w is not None:
+                    row["weight_grams"] = default_w
 
     preview_rows = [
         BatchRowPreview(
@@ -63,17 +76,20 @@ def create_batch_items(db: Session, data: BatchCreate) -> List[Item]:
     """
     Create all confirmed batch rows in a single transaction.
 
-    - Looks up or creates each unique purchase_location by name.
-    - Fetches the metal spot price once and computes markup_flat / markup_loan
-      for every row that has a listed price.
-    - Returns the created Item objects.
+    Metal batches:
+    - Fetches the metal spot price once and computes markup_flat / markup_loan.
+    N/A batches:
+    - No metal; listed_price_flat is set directly from the row; no markups.
     """
-    metal = db.query(Metal).filter(Metal.id == data.metal_id).first()
-    if not metal:
-        raise ValueError(f"Metal with id={data.metal_id} not found")
+    is_na = data.batch_type == "na"
 
-    # Fetch spot price once for the whole batch
-    spot_price = get_spot_price(metal.spot_price_api_symbol)
+    metal = None
+    spot_price = None
+    if not is_na:
+        metal = db.query(Metal).filter(Metal.id == data.metal_id).first()
+        if not metal:
+            raise ValueError(f"Metal with id={data.metal_id} not found")
+        spot_price = get_spot_price(metal.spot_price_api_symbol)
 
     # Cache location lookups within this batch to avoid redundant queries
     location_id_cache: dict[str, int] = {}
@@ -97,13 +113,11 @@ def create_batch_items(db: Session, data: BatchCreate) -> List[Item]:
                 location_id_cache[loc_name] = loc.id
             location_id = location_id_cache[loc_name]
 
-        # ── Markups ──────────────────────────────────────────────────────────
-        # Derive markup = listed_price - base_market_price at save time.
-        # If spot price is unavailable, markups stay NULL (prices still stored).
+        # ── Markups (metal batches only) ─────────────────────────────────────
         markup_flat: float | None = None
         markup_loan: float | None = None
 
-        if spot_price and row.weight_grams and data.purity_karat:
+        if not is_na and spot_price and row.weight_grams and data.purity_karat:
             base_market = (
                 (row.weight_grams / GRAMS_PER_TROY_OZ)
                 * spot_price
@@ -119,8 +133,8 @@ def create_batch_items(db: Session, data: BatchCreate) -> List[Item]:
         is_sold = row.status == ItemStatus.SOLD
         item = Item(
             category=row.category,
-            metal_id=data.metal_id,
-            purity_karat=data.purity_karat,
+            metal_id=data.metal_id if not is_na else None,
+            purity_karat=data.purity_karat if not is_na else None,
             weight_grams=row.weight_grams,
             quantity=qty,
             quantity_available=0 if is_sold else qty,
@@ -132,7 +146,7 @@ def create_batch_items(db: Session, data: BatchCreate) -> List[Item]:
             markup_flat=markup_flat,
             markup_loan=markup_loan,
             listed_price_flat=row.listed_price_flat,
-            listed_price_loan=row.listed_price_loan,
+            listed_price_loan=row.listed_price_loan if not is_na else None,
             sell_price=row.sell_price,
             is_visible=False,
             status=row.status,
