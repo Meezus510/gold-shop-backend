@@ -31,14 +31,14 @@ def compute_listed_prices(
     """
     Returns (base_market_price, listed_price_flat, listed_price_loan) or (None, None, None).
 
-    listed_price_flat = base_market_price + markup_flat
-    listed_price_loan = base_market_price + markup_loan
+    listed_price_flat = max(base_market_price + markup_flat, base_market_price * 1.1)
+    listed_price_loan = listed_price_flat + markup_loan
     """
     _, base_market_price = calculate_market_rate(
         api_symbol, weight_grams, purity_karat, purity_denominator
     )
     if base_market_price is None:
         return None, None, None
-    listed_flat = round(base_market_price + markup_flat, 2)
-    listed_loan = round(base_market_price + markup_loan, 2)
+    listed_flat = round(max(base_market_price + markup_flat, base_market_price * 1.1), 2)
+    listed_loan = round(listed_flat + max(markup_loan, 0), 2)
     return base_market_price, listed_flat, listed_loan

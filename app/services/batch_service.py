@@ -78,6 +78,7 @@ def create_batch_items(db: Session, data: BatchCreate) -> List[Item]:
 
     Metal batches:
     - Fetches the metal spot price once and computes markup_flat / markup_loan.
+      markup_flat is above metal value; markup_loan is above flat sale price.
     N/A batches:
     - No metal; listed_price_flat is set directly from the row; no markups.
     """
@@ -126,7 +127,12 @@ def create_batch_items(db: Session, data: BatchCreate) -> List[Item]:
             if row.listed_price_flat is not None:
                 markup_flat = round(float(row.listed_price_flat) - base_market, 2)
             if row.listed_price_loan is not None:
-                markup_loan = round(float(row.listed_price_loan) - base_market, 2)
+                flat_price = (
+                    float(row.listed_price_flat)
+                    if row.listed_price_flat is not None
+                    else base_market
+                )
+                markup_loan = max(round(float(row.listed_price_loan) - flat_price, 2), 0)
 
         # ── Item ─────────────────────────────────────────────────────────────
         qty = row.qty or 1

@@ -34,8 +34,8 @@ class Item(Base):
     cost = Column(Float, nullable=True)  # what you paid for it
 
     # ── Pricing config ────────────────────────────────────────────────────────
-    # Metal items: store markups ($ above base_market_price). Weekly scheduler
-    # recomputes listed_price_flat/loan from these + current spot price.
+    # Metal items: markup_flat is above base_market_price; markup_loan is
+    # above listed_price_flat. Weekly scheduler recomputes cached prices.
     # Non-metal items: markup_flat/loan are NULL; listed prices set directly.
     markup_flat = Column(Numeric(10, 2), nullable=True)
     markup_loan = Column(Numeric(10, 2), nullable=True)

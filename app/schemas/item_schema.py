@@ -45,7 +45,7 @@ class ItemCreate(BaseModel):
     purchase_location_id: int | None = None
     is_visible: bool = False
 
-    # Metal items: provide markups — listed prices are computed from spot price + markup
+    # Metal items: flat markup is above spot-derived metal value; loan markup is above flat price.
     markup_flat: Decimal | None = Field(default=None, ge=0)
     markup_loan: Decimal | None = Field(default=None, ge=0)
 
