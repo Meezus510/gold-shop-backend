@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal
 from typing import List
 
@@ -5,7 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models.item_image_model import ItemImage
-from app.models.item_model import Item, ItemStatus
+from app.models.item_model import Item, ItemStatus, PricingMode
 from app.models.item_translation_model import ItemTranslation
 from app.models.metal_model import Metal
 from app.schemas.item_schema import ItemCreate, ItemPublicOut, ItemUpdate, UnitAdjust
@@ -14,6 +15,8 @@ from app.services.pricing_service import compute_listed_prices
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+_LEADING_ITEM_NUMBER_RE = re.compile(r"^\s*(\d+)(?:\s*[-.]|\s+)\s*(.+?)\s*$")
 
 def _get_item_or_404(db: Session, item_id: int) -> Item:
     item = db.query(Item).filter(Item.item_id == item_id).first()
@@ -37,16 +40,42 @@ def _resolve_translation(item: Item, lang: str) -> dict:
 def _upsert_translations(db: Session, item: Item, translations: List[TranslationCreate]):
     existing = {t.language: t for t in item.translations}
     for t_data in translations:
+        name = _strip_leading_item_number(t_data.name)
         if t_data.language in existing:
-            existing[t_data.language].name        = t_data.name
+            existing[t_data.language].name        = name
             existing[t_data.language].description = t_data.description
         else:
             db.add(ItemTranslation(
                 item_id=item.item_id,
                 language=t_data.language,
-                name=t_data.name,
+                name=name,
                 description=t_data.description,
             ))
+
+
+def _strip_leading_item_number(value: str) -> str:
+    match = _LEADING_ITEM_NUMBER_RE.match(value)
+    return match.group(2) if match else value.strip()
+
+
+def _next_item_number(db: Session) -> int:
+    max_number = (
+        db.query(Item.item_number)
+        .filter(Item.item_number.isnot(None))
+        .order_by(Item.item_number.desc())
+        .limit(1)
+        .scalar()
+    )
+    return (max_number or 0) + 1
+
+
+def _ensure_item_number_available(db: Session, item_number: int, current_item_id: int | None = None) -> None:
+    existing = db.query(Item).filter(Item.item_number == item_number).first()
+    if existing and existing.item_id != current_item_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Item number {item_number} is already in use",
+        )
 
 
 def _replace_images(db: Session, item: Item, urls: List[str]):
@@ -60,6 +89,8 @@ def _compute_metal_listed_prices(db: Session, item: Item) -> tuple[Decimal | Non
     Returns (listed_price_flat, listed_price_loan) computed from current spot price + markups.
     Returns (None, None) if any required field is missing or spot price is unavailable.
     """
+    if item.pricing_mode != PricingMode.METAL_DYNAMIC:
+        return None, None
     if not item.metal_id or item.purity_karat is None or not item.weight_grams:
         return None, None
     if item.markup_flat is None:
@@ -110,6 +141,7 @@ def get_public_items(db: Session, lang: str) -> List[ItemPublicOut]:
         t = _resolve_translation(item, lang)
         result.append(ItemPublicOut(
             item_id=item.item_id,
+            item_number=item.item_number,
             name=t["name"],
             description=t["description"],
             category=item.category,
@@ -122,6 +154,7 @@ def get_public_items(db: Session, lang: str) -> List[ItemPublicOut]:
             status=item.status,
             metal=item.metal,
             purity_karat=item.purity_karat,
+            pricing_mode=item.pricing_mode,
         ))
     return result
 
@@ -133,6 +166,7 @@ def get_public_item(db: Session, item_id: int, lang: str) -> ItemPublicOut:
     t = _resolve_translation(item, lang)
     return ItemPublicOut(
         item_id=item.item_id,
+        item_number=item.item_number,
         name=t["name"],
         description=t["description"],
         category=item.category,
@@ -145,16 +179,22 @@ def get_public_item(db: Session, item_id: int, lang: str) -> ItemPublicOut:
         status=item.status,
         metal=item.metal,
         purity_karat=item.purity_karat,
+        pricing_mode=item.pricing_mode,
     )
 
 
 # ── Admin ─────────────────────────────────────────────────────────────────────
 
 def create_item(db: Session, data: ItemCreate) -> Item:
+    item_number = data.item_number or _next_item_number(db)
+    _ensure_item_number_available(db, item_number)
+
     item = Item(
+        item_number=item_number,
         category=data.category,
         metal_id=data.metal_id,
         purity_karat=data.purity_karat,
+        pricing_mode=data.pricing_mode,
         weight_grams=data.weight_grams,
         quantity=data.quantity,
         quantity_available=data.quantity,
@@ -172,8 +212,9 @@ def create_item(db: Session, data: ItemCreate) -> Item:
     db.add(item)
     db.flush()  # get item_id
 
-    # For metal items, compute listed prices from markups + current spot price
-    if data.metal_id and data.markup_flat is not None:
+    # For dynamic metal items, compute listed prices from markups + current spot price.
+    # Manual metal/mixed items keep the entered flat prices directly.
+    if data.metal_id and data.pricing_mode == PricingMode.METAL_DYNAMIC and data.markup_flat is not None:
         flat, loan = _compute_metal_listed_prices(db, item)
         if flat is not None:
             item.listed_price_flat = flat
@@ -184,7 +225,7 @@ def create_item(db: Session, data: ItemCreate) -> Item:
         db.add(ItemTranslation(
             item_id=item.item_id,
             language=t_data.language,
-            name=t_data.name,
+            name=_strip_leading_item_number(t_data.name),
             description=t_data.description,
         ))
 
@@ -199,10 +240,14 @@ def create_item(db: Session, data: ItemCreate) -> Item:
 def update_item(db: Session, item_id: int, data: ItemUpdate) -> Item:
     item = _get_item_or_404(db, item_id)
 
+    if data.item_number is not None:
+        _ensure_item_number_available(db, data.item_number, current_item_id=item.item_id)
+        item.item_number = data.item_number
     if data.category is not None:
         item.category = data.category
     # Always apply metal_id so frontend can clear it by sending null
     item.metal_id = data.metal_id
+    item.pricing_mode = data.pricing_mode
     if data.purity_karat is not None:
         item.purity_karat = data.purity_karat
     if data.weight_grams is not None:
@@ -240,7 +285,7 @@ def update_item(db: Session, item_id: int, data: ItemUpdate) -> Item:
         data.markup_flat is not None,
         data.markup_loan is not None,
     ])
-    if item.metal_id and metal_fields_changed and item.markup_flat is not None:
+    if item.metal_id and item.pricing_mode == PricingMode.METAL_DYNAMIC and metal_fields_changed and item.markup_flat is not None:
         flat, loan = _compute_metal_listed_prices(db, item)
         if flat is not None:
             item.listed_price_flat = flat

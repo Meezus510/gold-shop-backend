@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # Anthropic — Claude API for batch image parsing and translation
     ANTHROPIC_API_KEY: str = ""
 
+    # Customer PII encryption. Set this to a Fernet key in production:
+    # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    CUSTOMER_PII_ENCRYPTION_KEY: str = ""
+
     @field_validator("SECRET_KEY")
     @classmethod
     def secret_key_must_be_strong(cls, v: str) -> str:

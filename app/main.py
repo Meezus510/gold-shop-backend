@@ -10,7 +10,7 @@ from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import app.models  # noqa: F401 — registers all ORM models with SQLAlchemy metadata
-from app.api import routes_admin, routes_batch, routes_metals, routes_items, routes_locations
+from app.api import routes_admin, routes_batch, routes_metals, routes_items, routes_locations, routes_purchase_requests
 from app.config.settings import allowed_origins
 from app.db.database import Base, engine, SessionLocal
 from app.utils.limiter import limiter
@@ -109,6 +109,7 @@ app.include_router(routes_admin.router)
 app.include_router(routes_batch.router)
 app.include_router(routes_metals.router)
 app.include_router(routes_locations.router)
+app.include_router(routes_purchase_requests.router)
 
 
 # ── Global exception handler ──────────────────────────────────────────────────
@@ -122,6 +123,11 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
     )
 
 
-@app.api_route("/health", methods=["GET", "HEAD"], tags=["Health"])
+@app.get("/health", tags=["Health"])
 def health_check():
     return {"status": "ok"}
+
+
+@app.head("/health", include_in_schema=False)
+def health_check_head():
+    return Response(status_code=200)

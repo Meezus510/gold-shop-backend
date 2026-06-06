@@ -4,7 +4,7 @@ from typing import List, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.models.item_model import ItemStatus
+from app.models.item_model import ItemStatus, PricingMode
 from app.schemas.item_image_schema import ItemImageOut
 from app.schemas.metal_schema import MetalOut
 from app.schemas.purchase_location_schema import PurchaseLocationOut
@@ -15,6 +15,7 @@ from app.schemas.translation_schema import TranslationCreate, TranslationOut
 
 class ItemPublicOut(BaseModel):
     item_id:     int
+    item_number: int | None = None
     name:        str
     description: str | None = None
     category:    str
@@ -28,6 +29,7 @@ class ItemPublicOut(BaseModel):
     status:    ItemStatus
     metal:        MetalOut | None = None
     purity_karat: float | None = None
+    pricing_mode: PricingMode = PricingMode.METAL_DYNAMIC
 
     model_config = {"from_attributes": True}
 
@@ -35,9 +37,11 @@ class ItemPublicOut(BaseModel):
 # ── Admin create ─────────────────────────────────────────────────────────────
 
 class ItemCreate(BaseModel):
+    item_number:  int   | None = Field(default=None, ge=1, le=1_000_000)
     category:     str   = Field(min_length=1, max_length=100)
     metal_id:     int   | None = None
     purity_karat: float | None = Field(default=None, gt=0, le=1_000)
+    pricing_mode: PricingMode = PricingMode.METAL_DYNAMIC
     weight_grams: float | None = Field(default=None, gt=0, le=100_000)
     quantity:     int          = Field(default=1, ge=1, le=100_000)
     cost:         float | None = Field(default=None, ge=0)
@@ -61,9 +65,11 @@ class ItemCreate(BaseModel):
 # ── Admin update ─────────────────────────────────────────────────────────────
 
 class ItemUpdate(BaseModel):
+    item_number:  int   | None = Field(default=None, ge=1, le=1_000_000)
     category:     str   | None = Field(default=None, min_length=1, max_length=100)
     metal_id:     int   | None = None
     purity_karat: float | None = Field(default=None, gt=0, le=1_000)
+    pricing_mode: PricingMode = PricingMode.METAL_DYNAMIC
     weight_grams: float | None = Field(default=None, gt=0, le=100_000)
     quantity:     int   | None = Field(default=None, ge=1, le=100_000)
     cost:         float | None = Field(default=None, ge=0)
@@ -116,9 +122,11 @@ class UnitAdjust(BaseModel):
 
 class ItemAdminOut(BaseModel):
     item_id:      int
+    item_number:  int | None = None
     category:     str
     metal:        MetalOut | None = None
     purity_karat: float | None = None
+    pricing_mode: PricingMode = PricingMode.METAL_DYNAMIC
     weight_grams: float | None = None
     cost:         float | None = None
     purchase_date: date | None = None

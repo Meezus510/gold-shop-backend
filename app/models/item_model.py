@@ -13,15 +13,22 @@ class ItemStatus(str, enum.Enum):
     SOLD         = "SOLD"
 
 
+class PricingMode(str, enum.Enum):
+    METAL_DYNAMIC = "METAL_DYNAMIC"
+    MANUAL        = "MANUAL"
+
+
 class Item(Base):
     __tablename__ = "items"
 
-    item_id  = Column(Integer, primary_key=True, index=True)
-    category = Column(String, nullable=False)
+    item_id     = Column(Integer, primary_key=True, index=True)
+    item_number = Column(Integer, unique=True, nullable=True, index=True)
+    category    = Column(String, nullable=False)
 
-    # Metal link — nullable so non-metal items (bags, accessories, etc.) are supported
+    # Metal link — nullable so non-metal items (bags, accessories, mixed-material, etc.) are supported
     metal_id     = Column(Integer, ForeignKey("metals.id"), nullable=True)
     purity_karat = Column(Float, nullable=True)   # e.g. 14 (for 14k gold), 925 (sterling silver)
+    pricing_mode = Column(Enum(PricingMode), nullable=False, default=PricingMode.METAL_DYNAMIC)
 
     weight_grams = Column(Float, nullable=True)
     purchase_date = Column(Date, nullable=True)

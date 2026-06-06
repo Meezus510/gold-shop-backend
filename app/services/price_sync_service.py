@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models.item_model import Item
+from app.models.item_model import Item, PricingMode
 from app.models.metal_model import Metal
 from app.models.price_sync_model import PriceSyncConfig
 from app.services.metals_price_service import get_spot_price, invalidate_cache
@@ -38,7 +38,14 @@ def recalculate_all(db: Session, *, force_fresh_prices: bool = True) -> dict:
             errors.append(f"Could not fetch {metal.name} spot price")
             continue
 
-        items = db.query(Item).filter(Item.metal_id == metal.id).all()
+        items = (
+            db.query(Item)
+            .filter(
+                Item.metal_id == metal.id,
+                Item.pricing_mode == PricingMode.METAL_DYNAMIC,
+            )
+            .all()
+        )
         for item in items:
             if item.weight_grams and item.purity_karat and item.markup_flat is not None:
                 _, listed_flat, listed_loan = compute_listed_prices(
@@ -68,6 +75,8 @@ def recalculate_one(db: Session, item_id: int) -> Item:
         raise ValueError("Item not found")
     if not item.metal_id:
         raise ValueError("Item has no metal — prices must be set manually")
+    if item.pricing_mode != PricingMode.METAL_DYNAMIC:
+        raise ValueError("Item uses manual pricing — prices must be set manually")
     if not (item.weight_grams and item.purity_karat and item.markup_flat is not None):
         raise ValueError("Item is missing weight, purity, or markup_flat")
 

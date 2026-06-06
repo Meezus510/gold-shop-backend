@@ -96,6 +96,13 @@ def create_batch_items(db: Session, data: BatchCreate) -> List[Item]:
     location_id_cache: dict[str, int] = {}
 
     created_items: List[Item] = []
+    next_item_number = (
+        db.query(Item.item_number)
+        .filter(Item.item_number.isnot(None))
+        .order_by(Item.item_number.desc())
+        .limit(1)
+        .scalar() or 0
+    ) + 1
 
     for row in data.rows:
         # ── Purchase location ────────────────────────────────────────────────
@@ -138,6 +145,7 @@ def create_batch_items(db: Session, data: BatchCreate) -> List[Item]:
         qty = row.qty or 1
         is_sold = row.status == ItemStatus.SOLD
         item = Item(
+            item_number=next_item_number,
             category=row.category,
             metal_id=data.metal_id if not is_na else None,
             purity_karat=data.purity_karat if not is_na else None,
@@ -158,6 +166,7 @@ def create_batch_items(db: Session, data: BatchCreate) -> List[Item]:
             status=row.status,
         )
         db.add(item)
+        next_item_number += 1
         db.flush()  # get item_id before adding translations
 
         # ── Translations ─────────────────────────────────────────────────────
