@@ -21,9 +21,10 @@ class PricingMode(str, enum.Enum):
 class Item(Base):
     __tablename__ = "items"
 
-    item_id     = Column(Integer, primary_key=True, index=True)
-    item_number = Column(Integer, unique=True, nullable=True, index=True)
-    category    = Column(String, nullable=False)
+    item_id            = Column(Integer, primary_key=True, index=True)
+    item_number_prefix = Column(String(8), nullable=True, index=True)
+    item_number        = Column(Integer, nullable=True, index=True)
+    category           = Column(String, nullable=False)
 
     # Metal link — nullable so non-metal items (bags, accessories, mixed-material, etc.) are supported
     metal_id     = Column(Integer, ForeignKey("metals.id"), nullable=True)
@@ -76,3 +77,9 @@ class Item(Base):
         "ItemImage", back_populates="item", cascade="all, delete-orphan",
         order_by="ItemImage.position", lazy="selectin",
     )
+
+    @property
+    def item_code(self) -> str | None:
+        if not self.item_number_prefix or self.item_number is None:
+            return None
+        return f"{self.item_number_prefix}-{self.item_number}"

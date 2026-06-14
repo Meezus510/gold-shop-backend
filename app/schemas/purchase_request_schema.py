@@ -25,7 +25,9 @@ class PurchaseRequestAdminOut(BaseModel):
     id: int
     status: PurchaseRequestStatus
     item_id: int
+    item_number_prefix_snapshot: str | None = None
     item_number_snapshot: int | None = None
+    item_code_snapshot: str | None = None
     item_name_snapshot: str
     listed_price_snapshot: Decimal | None = None
     customer_name: str

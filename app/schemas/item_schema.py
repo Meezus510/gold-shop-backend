@@ -15,7 +15,9 @@ from app.schemas.translation_schema import TranslationCreate, TranslationOut
 
 class ItemPublicOut(BaseModel):
     item_id:     int
+    item_number_prefix: str | None = None
     item_number: int | None = None
+    item_code:   str | None = None
     name:        str
     description: str | None = None
     category:    str
@@ -122,7 +124,9 @@ class UnitAdjust(BaseModel):
 
 class ItemAdminOut(BaseModel):
     item_id:      int
+    item_number_prefix: str | None = None
     item_number:  int | None = None
+    item_code:    str | None = None
     category:     str
     metal:        MetalOut | None = None
     purity_karat: float | None = None

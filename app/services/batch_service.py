@@ -7,13 +7,14 @@ from typing import List
 from sqlalchemy.orm import Session
 
 from app.models.item_image_model import ItemImage
-from app.models.item_model import Item, ItemStatus
+from app.models.item_model import Item, ItemStatus, PricingMode
 from app.models.item_translation_model import ItemTranslation
 from app.models.metal_model import Metal
 from app.models.purchase_location_model import PurchaseLocation
 from app.schemas.batch_schema import BatchCreate, BatchParseResponse, BatchRowPreview
 from app.services import claude_service
 from app.services.cloudinary_service import upload_image
+from app.services.item_number_service import item_number_prefix, next_item_number
 from app.services.metals_price_service import GRAMS_PER_TROY_OZ, get_spot_price
 
 logger = logging.getLogger(__name__)
@@ -94,15 +95,9 @@ def create_batch_items(db: Session, data: BatchCreate) -> List[Item]:
 
     # Cache location lookups within this batch to avoid redundant queries
     location_id_cache: dict[str, int] = {}
+    next_numbers_by_prefix: dict[str, int] = {}
 
     created_items: List[Item] = []
-    next_item_number = (
-        db.query(Item.item_number)
-        .filter(Item.item_number.isnot(None))
-        .order_by(Item.item_number.desc())
-        .limit(1)
-        .scalar() or 0
-    ) + 1
 
     for row in data.rows:
         # ── Purchase location ────────────────────────────────────────────────
@@ -144,11 +139,25 @@ def create_batch_items(db: Session, data: BatchCreate) -> List[Item]:
         # ── Item ─────────────────────────────────────────────────────────────
         qty = row.qty or 1
         is_sold = row.status == ItemStatus.SOLD
+        pricing_mode = PricingMode.MANUAL if is_na else PricingMode.METAL_DYNAMIC
+        prefix = item_number_prefix(
+            db,
+            category=row.category,
+            metal_id=data.metal_id if not is_na else None,
+            pricing_mode=pricing_mode,
+        )
+        if prefix not in next_numbers_by_prefix:
+            next_numbers_by_prefix[prefix] = next_item_number(db, prefix)
+        item_number = next_numbers_by_prefix[prefix]
+        next_numbers_by_prefix[prefix] += 1
+
         item = Item(
-            item_number=next_item_number,
+            item_number_prefix=prefix,
+            item_number=item_number,
             category=row.category,
             metal_id=data.metal_id if not is_na else None,
             purity_karat=data.purity_karat if not is_na else None,
+            pricing_mode=pricing_mode,
             weight_grams=row.weight_grams,
             quantity=qty,
             quantity_available=0 if is_sold else qty,
@@ -166,7 +175,6 @@ def create_batch_items(db: Session, data: BatchCreate) -> List[Item]:
             status=row.status,
         )
         db.add(item)
-        next_item_number += 1
         db.flush()  # get item_id before adding translations
 
         # ── Translations ─────────────────────────────────────────────────────

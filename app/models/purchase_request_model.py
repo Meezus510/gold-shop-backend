@@ -21,6 +21,7 @@ class PurchaseRequest(Base):
     item_id = Column(Integer, ForeignKey("items.item_id", ondelete="RESTRICT"), nullable=False, index=True)
     status = Column(Enum(PurchaseRequestStatus), nullable=False, default=PurchaseRequestStatus.PENDING, index=True)
 
+    item_number_prefix_snapshot = Column(String(8), nullable=True)
     item_number_snapshot = Column(Integer, nullable=True)
     item_name_snapshot = Column(String, nullable=False)
     listed_price_snapshot = Column(Numeric(10, 2), nullable=True)

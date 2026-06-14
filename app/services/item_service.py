@@ -11,12 +11,15 @@ from app.models.item_translation_model import ItemTranslation
 from app.models.metal_model import Metal
 from app.schemas.item_schema import ItemCreate, ItemPublicOut, ItemUpdate, UnitAdjust
 from app.schemas.translation_schema import TranslationCreate
+from app.services.item_number_service import item_number_prefix, next_item_number
 from app.services.pricing_service import compute_listed_prices
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-_LEADING_ITEM_NUMBER_RE = re.compile(r"^\s*(\d+)(?:\s*[-.]|\s+)\s*(.+?)\s*$")
+_LEADING_ITEM_NUMBER_RE = re.compile(
+    r"^\s*(?:#\s*)?(?:(?:[A-Za-z]{1,3}\s*-\s*\d+)|(?:\d+\s*-\s*[A-Za-z]{1,3})|\d+)(?:\s*[-.]|\s+)\s*(.+?)\s*$"
+)
 
 def _get_item_or_404(db: Session, item_id: int) -> Item:
     item = db.query(Item).filter(Item.item_id == item_id).first()
@@ -58,23 +61,24 @@ def _strip_leading_item_number(value: str) -> str:
     return match.group(2) if match else value.strip()
 
 
-def _next_item_number(db: Session) -> int:
-    max_number = (
-        db.query(Item.item_number)
-        .filter(Item.item_number.isnot(None))
-        .order_by(Item.item_number.desc())
-        .limit(1)
-        .scalar()
+def _ensure_item_number_available(
+    db: Session,
+    prefix: str,
+    item_number: int,
+    current_item_id: int | None = None,
+) -> None:
+    existing = (
+        db.query(Item)
+        .filter(
+            Item.item_number_prefix == prefix,
+            Item.item_number == item_number,
+        )
+        .first()
     )
-    return (max_number or 0) + 1
-
-
-def _ensure_item_number_available(db: Session, item_number: int, current_item_id: int | None = None) -> None:
-    existing = db.query(Item).filter(Item.item_number == item_number).first()
     if existing and existing.item_id != current_item_id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Item number {item_number} is already in use",
+            detail=f"Item number {prefix}-{item_number} is already in use",
         )
 
 
@@ -141,7 +145,9 @@ def get_public_items(db: Session, lang: str) -> List[ItemPublicOut]:
         t = _resolve_translation(item, lang)
         result.append(ItemPublicOut(
             item_id=item.item_id,
+            item_number_prefix=item.item_number_prefix,
             item_number=item.item_number,
+            item_code=item.item_code,
             name=t["name"],
             description=t["description"],
             category=item.category,
@@ -166,7 +172,9 @@ def get_public_item(db: Session, item_id: int, lang: str) -> ItemPublicOut:
     t = _resolve_translation(item, lang)
     return ItemPublicOut(
         item_id=item.item_id,
+        item_number_prefix=item.item_number_prefix,
         item_number=item.item_number,
+        item_code=item.item_code,
         name=t["name"],
         description=t["description"],
         category=item.category,
@@ -186,10 +194,17 @@ def get_public_item(db: Session, item_id: int, lang: str) -> ItemPublicOut:
 # ── Admin ─────────────────────────────────────────────────────────────────────
 
 def create_item(db: Session, data: ItemCreate) -> Item:
-    item_number = data.item_number or _next_item_number(db)
-    _ensure_item_number_available(db, item_number)
+    prefix = item_number_prefix(
+        db,
+        category=data.category,
+        metal_id=data.metal_id,
+        pricing_mode=data.pricing_mode,
+    )
+    item_number = data.item_number or next_item_number(db, prefix)
+    _ensure_item_number_available(db, prefix, item_number)
 
     item = Item(
+        item_number_prefix=prefix,
         item_number=item_number,
         category=data.category,
         metal_id=data.metal_id,
@@ -239,15 +254,29 @@ def create_item(db: Session, data: ItemCreate) -> Item:
 
 def update_item(db: Session, item_id: int, data: ItemUpdate) -> Item:
     item = _get_item_or_404(db, item_id)
+    old_prefix = item.item_number_prefix
+    old_number = item.item_number
 
-    if data.item_number is not None:
-        _ensure_item_number_available(db, data.item_number, current_item_id=item.item_id)
-        item.item_number = data.item_number
     if data.category is not None:
         item.category = data.category
     # Always apply metal_id so frontend can clear it by sending null
     item.metal_id = data.metal_id
     item.pricing_mode = data.pricing_mode
+    prefix = item_number_prefix(
+        db,
+        category=item.category,
+        metal_id=item.metal_id,
+        pricing_mode=item.pricing_mode,
+    )
+    if prefix != old_prefix:
+        item_number = data.item_number if data.item_number is not None and data.item_number != old_number else None
+    else:
+        item_number = data.item_number if data.item_number is not None else item.item_number
+    if item_number is None:
+        item_number = next_item_number(db, prefix)
+    _ensure_item_number_available(db, prefix, item_number, current_item_id=item.item_id)
+    item.item_number_prefix = prefix
+    item.item_number = item_number
     if data.purity_karat is not None:
         item.purity_karat = data.purity_karat
     if data.weight_grams is not None:

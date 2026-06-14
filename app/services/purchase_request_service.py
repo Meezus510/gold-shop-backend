@@ -35,7 +35,13 @@ def _admin_out(request: PurchaseRequest) -> PurchaseRequestAdminOut:
         id=request.id,
         status=request.status,
         item_id=request.item_id,
+        item_number_prefix_snapshot=request.item_number_prefix_snapshot,
         item_number_snapshot=request.item_number_snapshot,
+        item_code_snapshot=(
+            f"{request.item_number_prefix_snapshot}-{request.item_number_snapshot}"
+            if request.item_number_prefix_snapshot and request.item_number_snapshot is not None
+            else None
+        ),
         item_name_snapshot=request.item_name_snapshot,
         listed_price_snapshot=request.listed_price_snapshot,
         customer_name=decrypt_text(request.customer.name_encrypted),
@@ -79,6 +85,7 @@ def create_request(db: Session, data: PurchaseRequestCreate) -> PurchaseRequest:
     request = PurchaseRequest(
         customer_id=customer.id,
         item_id=item.item_id,
+        item_number_prefix_snapshot=item.item_number_prefix,
         item_number_snapshot=item.item_number,
         item_name_snapshot=_resolve_item_name(item),
         listed_price_snapshot=item.listed_price_flat,
