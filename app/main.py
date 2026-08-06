@@ -10,9 +10,18 @@ from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import app.models  # noqa: F401 — registers all ORM models with SQLAlchemy metadata
-from app.api import routes_admin, routes_batch, routes_metals, routes_items, routes_locations, routes_purchase_requests
+from app.api import (
+    routes_admin,
+    routes_batch,
+    routes_fast_broquel,
+    routes_items,
+    routes_locations,
+    routes_metals,
+    routes_purchase_requests,
+)
 from app.config.settings import allowed_origins
 from app.db.database import Base, engine, SessionLocal
+from app.db.startup_migrations import run_startup_migrations
 from app.utils.limiter import limiter
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -65,6 +74,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 async def lifespan(_: FastAPI):
     # ── Startup ──────────────────────────────────────────────────────────────
     Base.metadata.create_all(bind=engine)
+    run_startup_migrations(engine)
 
     from app.services import scheduler_service
     db = SessionLocal()
@@ -107,6 +117,7 @@ app.add_middleware(
 app.include_router(routes_items.router)
 app.include_router(routes_admin.router)
 app.include_router(routes_batch.router)
+app.include_router(routes_fast_broquel.router)
 app.include_router(routes_metals.router)
 app.include_router(routes_locations.router)
 app.include_router(routes_purchase_requests.router)

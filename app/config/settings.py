@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_HOURS: int = 24
 
+    # Automatic metal price recalculation. Manual admin recalculation remains
+    # available when this is disabled.
+    PRICE_SYNC_SCHEDULER_ENABLED: bool = False
+
     # CORS — comma-separated list of allowed origins
     # Example: "http://localhost:5500,https://your-site.netlify.app"
     ALLOWED_ORIGINS: str = "http://localhost:5500,http://localhost:3000,http://127.0.0.1:5500"
@@ -35,6 +39,10 @@ class Settings(BaseSettings):
 
     # Anthropic — Claude API for batch image parsing and translation
     ANTHROPIC_API_KEY: str = ""
+
+    # Low-cost vision model used by the fast Broqueles intake flow.
+    GEMINI_API_KEY: str = ""
+    FAST_BROQUEL_AI_MODEL: str = "gemini-2.5-flash-lite"
 
     # Customer PII encryption. Set this to a Fernet key in production:
     # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

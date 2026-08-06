@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import cloudinary
 import cloudinary.uploader
 
@@ -19,14 +21,15 @@ def upload_image(file_bytes: bytes, filename: str) -> str:
     Uploads image bytes to Cloudinary under the gold-shop/ folder.
     Returns the secure HTTPS URL of the uploaded image.
     """
-    # Use the original filename (without extension) as the public_id
-    # so re-uploading the same file overwrites it instead of creating duplicates.
-    public_id = f"{FOLDER}/{filename.rsplit('.', 1)[0]}"
+    # Uploads from phones and browsers often reuse filenames (for example,
+    # "image.jpg"). A unique public ID prevents a later upload from replacing
+    # an image that is already referenced by another item.
+    public_id = f"{FOLDER}/{uuid4().hex}"
 
     result = cloudinary.uploader.upload(
         file_bytes,
         public_id=public_id,
-        overwrite=True,
+        overwrite=False,
         resource_type="image",
         # Auto-optimize: serve WebP/AVIF to modern browsers, compress quality
         transformation=[

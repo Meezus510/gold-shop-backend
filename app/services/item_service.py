@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List
 
@@ -119,8 +120,56 @@ def _recompute_status(item: Item) -> None:
         item.status = ItemStatus.AVAILABLE
     elif item.quantity_pending > 0:
         item.status = ItemStatus.SALE_PENDING
-    else:
+    elif item.quantity_sold > 0:
         item.status = ItemStatus.SOLD
+    elif item.quantity_returned_to_vendor > 0:
+        item.status = ItemStatus.RETURNED_TO_VENDOR
+    else:
+        # Preserve the legacy terminal fallback for malformed/older rows with
+        # no units assigned to any bucket.
+        item.status = ItemStatus.SOLD
+
+
+def _sync_vendor_return_fields(item: Item) -> None:
+    """Keep vendor-refund accounting aligned with the returned unit count."""
+    returned = item.quantity_returned_to_vendor
+    if returned <= 0:
+        item.vendor_refund_amount = None
+        item.returned_to_vendor_at = None
+        return
+
+    if item.cost is not None and item.quantity > 0:
+        item.vendor_refund_amount = round(
+            Decimal(str(item.cost)) * Decimal(returned) / Decimal(item.quantity),
+            2,
+        )
+    else:
+        item.vendor_refund_amount = None
+    if item.returned_to_vendor_at is None:
+        item.returned_to_vendor_at = datetime.now(timezone.utc)
+
+
+def _set_whole_item_status(
+    item: Item,
+    new_status: ItemStatus,
+    sell_price: float | None = None,
+) -> None:
+    item.quantity_available = item.quantity if new_status == ItemStatus.AVAILABLE else 0
+    item.quantity_pending = item.quantity if new_status == ItemStatus.SALE_PENDING else 0
+    item.quantity_sold = item.quantity if new_status == ItemStatus.SOLD else 0
+    item.quantity_returned_to_vendor = (
+        item.quantity if new_status == ItemStatus.RETURNED_TO_VENDOR else 0
+    )
+    item.status = new_status
+
+    if new_status == ItemStatus.SOLD:
+        if sell_price is not None:
+            item.sell_price = sell_price
+    elif new_status == ItemStatus.RETURNED_TO_VENDOR:
+        item.sell_price = None
+        item.is_visible = False
+
+    _sync_vendor_return_fields(item)
 
 
 def _primary_image_url(item: Item) -> str | None:
@@ -215,6 +264,7 @@ def create_item(db: Session, data: ItemCreate) -> Item:
         quantity_available=data.quantity,
         quantity_pending=0,
         quantity_sold=0,
+        quantity_returned_to_vendor=0,
         cost=data.cost,
         purchase_date=data.purchase_date,
         purchase_location_id=data.purchase_location_id,
@@ -299,10 +349,8 @@ def update_item(db: Session, item_id: int, data: ItemUpdate) -> Item:
     item.purchase_location_id = data.purchase_location_id
     if data.cost is not None:
         item.cost = data.cost
-    if data.sell_price is not None:
+    if data.sell_price is not None and data.status != ItemStatus.RETURNED_TO_VENDOR:
         item.sell_price = data.sell_price
-    if data.status is not None:
-        item.status = data.status
     if data.is_visible is not None:
         item.is_visible = data.is_visible
 
@@ -327,6 +375,13 @@ def update_item(db: Session, item_id: int, data: ItemUpdate) -> Item:
     if data.image_urls is not None:
         _replace_images(db, item, data.image_urls)
 
+    if data.status is not None:
+        _set_whole_item_status(item, data.status, data.sell_price)
+    elif item.quantity_returned_to_vendor > 0 and (
+        data.cost is not None or data.quantity is not None
+    ):
+        _sync_vendor_return_fields(item)
+
     db.commit()
     db.refresh(item)
     return item
@@ -345,15 +400,7 @@ def update_item_status(
     sell_price: float | None = None,
 ) -> Item:
     item = _get_item_or_404(db, item_id)
-    if new_status == ItemStatus.AVAILABLE:
-        item.quantity_available, item.quantity_pending, item.quantity_sold = item.quantity, 0, 0
-    elif new_status == ItemStatus.SALE_PENDING:
-        item.quantity_available, item.quantity_pending, item.quantity_sold = 0, item.quantity, 0
-    else:  # SOLD
-        item.quantity_available, item.quantity_pending, item.quantity_sold = 0, 0, item.quantity
-    item.status = new_status
-    if sell_price is not None:
-        item.sell_price = sell_price
+    _set_whole_item_status(item, new_status, sell_price)
     db.commit()
     db.refresh(item)
     return item
@@ -375,6 +422,7 @@ def adjust_units(db: Session, item_id: int, data: UnitAdjust) -> Item:
         "available": "quantity_available",
         "pending":   "quantity_pending",
         "sold":      "quantity_sold",
+        "returned_to_vendor": "quantity_returned_to_vendor",
     }
     src_attr = counter[data.from_state]
     dst_attr = counter[data.to_state]
@@ -389,6 +437,10 @@ def adjust_units(db: Session, item_id: int, data: UnitAdjust) -> Item:
     setattr(item, src_attr, src_count - data.units)
     setattr(item, dst_attr, getattr(item, dst_attr) + data.units)
     _recompute_status(item)
+    _sync_vendor_return_fields(item)
+    if item.status == ItemStatus.RETURNED_TO_VENDOR:
+        item.sell_price = None
+        item.is_visible = False
 
     db.commit()
     db.refresh(item)

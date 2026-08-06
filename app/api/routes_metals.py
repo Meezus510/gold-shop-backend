@@ -3,6 +3,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.config.settings import settings
 from app.db.database import get_db
 from app.models.admin_model import Admin
 from app.models.item_model import Item
@@ -155,17 +156,21 @@ def recalculate_all_metal_prices(
     db: Session = Depends(get_db),
     _: Admin = Depends(get_current_admin),
 ):
-    """Recalculates prices for ALL metal items, then resets the weekly auto-sync countdown."""
+    """Manually recalculates prices for all metal items."""
     from datetime import datetime, timedelta, timezone
     result = price_sync_service.recalculate_all(db, force_fresh_prices=True)
-    next_sync = datetime.now(timezone.utc) + timedelta(days=price_sync_service.SYNC_INTERVAL_DAYS)
+    next_sync = None
+    if settings.PRICE_SYNC_SCHEDULER_ENABLED:
+        next_sync = datetime.now(timezone.utc) + timedelta(days=price_sync_service.SYNC_INTERVAL_DAYS)
     price_sync_service.record_sync(db, result["updated"], next_sync)
-    scheduler_service.reset_schedule(db, next_sync)
+    if next_sync is not None:
+        scheduler_service.reset_schedule(db, next_sync)
     return {
         "total_updated": result["updated"],
         "total_skipped": result["skipped"],
         "errors":        result["errors"],
-        "next_sync_at":  next_sync.isoformat(),
+        "scheduler_enabled": settings.PRICE_SYNC_SCHEDULER_ENABLED,
+        "next_sync_at":  next_sync.isoformat() if next_sync else None,
     }
 
 
@@ -176,10 +181,18 @@ def price_sync_status(
 ):
     """Returns last/next sync times and the scheduler's live next_run_time."""
     config = price_sync_service.get_or_create_config(db)
-    next_run = scheduler_service.get_next_run_time()
+    next_run = (
+        scheduler_service.get_next_run_time()
+        if settings.PRICE_SYNC_SCHEDULER_ENABLED
+        else None
+    )
     return {
+        "scheduler_enabled": settings.PRICE_SYNC_SCHEDULER_ENABLED,
         "last_sync_at":       config.last_sync_at.isoformat() if config.last_sync_at else None,
-        "next_sync_at":       (next_run or config.next_sync_at or None) and
-                              (next_run or config.next_sync_at).isoformat(),
+        "next_sync_at": (
+            (next_run or config.next_sync_at).isoformat()
+            if settings.PRICE_SYNC_SCHEDULER_ENABLED and (next_run or config.next_sync_at)
+            else None
+        ),
         "last_items_updated": config.last_items_updated,
     }

@@ -8,9 +8,10 @@ from app.db.database import Base
 
 
 class ItemStatus(str, enum.Enum):
-    AVAILABLE    = "AVAILABLE"
-    SALE_PENDING = "SALE_PENDING"
-    SOLD         = "SOLD"
+    AVAILABLE          = "AVAILABLE"
+    SALE_PENDING       = "SALE_PENDING"
+    SOLD               = "SOLD"
+    RETURNED_TO_VENDOR = "RETURNED_TO_VENDOR"
 
 
 class PricingMode(str, enum.Enum):
@@ -38,6 +39,7 @@ class Item(Base):
     quantity_available = Column(Integer, nullable=False, default=0)
     quantity_pending   = Column(Integer, nullable=False, default=0)
     quantity_sold      = Column(Integer, nullable=False, default=0)
+    quantity_returned_to_vendor = Column(Integer, nullable=False, default=0)
 
     cost = Column(Float, nullable=True)  # what you paid for it
 
@@ -56,6 +58,10 @@ class Item(Base):
     # DB column renamed to actual_sell_price; Python attr kept as sell_price
     # for backward compatibility with existing API responses.
     sell_price = Column("actual_sell_price", Numeric(10, 2), nullable=True)
+
+    # Vendor refunds recover inventory cost; they are not customer revenue.
+    vendor_refund_amount = Column(Numeric(10, 2), nullable=True)
+    returned_to_vendor_at = Column(DateTime(timezone=True), nullable=True)
 
     purchase_location_id = Column(Integer, ForeignKey("purchase_locations.id"), nullable=True)
     is_visible = Column(Boolean, nullable=False, default=False)

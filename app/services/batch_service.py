@@ -2,6 +2,7 @@
 Batch item processing: image parsing and bulk item creation.
 """
 import logging
+from datetime import datetime, timezone
 from typing import List
 
 from sqlalchemy.orm import Session
@@ -138,7 +139,10 @@ def create_batch_items(db: Session, data: BatchCreate) -> List[Item]:
 
         # ── Item ─────────────────────────────────────────────────────────────
         qty = row.qty or 1
+        is_available = row.status == ItemStatus.AVAILABLE
+        is_pending = row.status == ItemStatus.SALE_PENDING
         is_sold = row.status == ItemStatus.SOLD
+        is_returned_to_vendor = row.status == ItemStatus.RETURNED_TO_VENDOR
         pricing_mode = PricingMode.MANUAL if is_na else PricingMode.METAL_DYNAMIC
         prefix = item_number_prefix(
             db,
@@ -160,9 +164,10 @@ def create_batch_items(db: Session, data: BatchCreate) -> List[Item]:
             pricing_mode=pricing_mode,
             weight_grams=row.weight_grams,
             quantity=qty,
-            quantity_available=0 if is_sold else qty,
-            quantity_pending=0,
+            quantity_available=qty if is_available else 0,
+            quantity_pending=qty if is_pending else 0,
             quantity_sold=qty if is_sold else 0,
+            quantity_returned_to_vendor=qty if is_returned_to_vendor else 0,
             cost=row.cost,
             purchase_date=row.purchase_date,
             purchase_location_id=location_id,
@@ -170,7 +175,11 @@ def create_batch_items(db: Session, data: BatchCreate) -> List[Item]:
             markup_loan=markup_loan,
             listed_price_flat=row.listed_price_flat,
             listed_price_loan=row.listed_price_loan if not is_na else None,
-            sell_price=row.sell_price,
+            sell_price=None if is_returned_to_vendor else row.sell_price,
+            vendor_refund_amount=row.cost if is_returned_to_vendor else None,
+            returned_to_vendor_at=(
+                datetime.now(timezone.utc) if is_returned_to_vendor else None
+            ),
             is_visible=False,
             status=row.status,
         )

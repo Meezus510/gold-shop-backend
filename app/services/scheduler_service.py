@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
 
+from app.config.settings import settings
 from app.services.price_sync_service import (
     SYNC_INTERVAL_DAYS,
     get_or_create_config,
@@ -48,6 +49,10 @@ async def _price_sync_job() -> None:
 
 def start(db: Session) -> None:
     """Called once at app startup. Schedules the next sync based on persisted config."""
+    if not settings.PRICE_SYNC_SCHEDULER_ENABLED:
+        logger.info("Price sync scheduler is disabled")
+        return
+
     config = get_or_create_config(db)
     now = datetime.now(timezone.utc)
 
@@ -80,6 +85,9 @@ def get_next_run_time() -> datetime | None:
 
 def reset_schedule(db: Session, next_sync: datetime) -> None:
     """Called after a manual full sync to push the next auto-sync 7 days out."""
+    if not settings.PRICE_SYNC_SCHEDULER_ENABLED:
+        return
+
     _reschedule(next_sync)
     # Persist the new next_sync_at so it survives a restart
     config = get_or_create_config(db)

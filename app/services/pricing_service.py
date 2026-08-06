@@ -1,5 +1,7 @@
 from app.services.metals_price_service import GRAMS_PER_TROY_OZ, get_spot_price
 
+MIN_LISTED_PRICE_MULTIPLIER = 1.5
+
 
 def calculate_market_rate(
     api_symbol: str,
@@ -31,7 +33,10 @@ def compute_listed_prices(
     """
     Returns (base_market_price, listed_price_flat, listed_price_loan) or (None, None, None).
 
-    listed_price_flat = max(base_market_price + markup_flat, base_market_price * 1.1)
+    listed_price_flat = max(
+        base_market_price + markup_flat,
+        base_market_price * MIN_LISTED_PRICE_MULTIPLIER,
+    )
     listed_price_loan = listed_price_flat + markup_loan
     """
     _, base_market_price = calculate_market_rate(
@@ -39,6 +44,12 @@ def compute_listed_prices(
     )
     if base_market_price is None:
         return None, None, None
-    listed_flat = round(max(base_market_price + markup_flat, base_market_price * 1.1), 2)
+    listed_flat = round(
+        max(
+            base_market_price + markup_flat,
+            base_market_price * MIN_LISTED_PRICE_MULTIPLIER,
+        ),
+        2,
+    )
     listed_loan = round(listed_flat + max(markup_loan, 0), 2)
     return base_market_price, listed_flat, listed_loan

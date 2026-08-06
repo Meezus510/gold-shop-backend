@@ -16,6 +16,12 @@ services:
         value: HS256
       - key: ACCESS_TOKEN_EXPIRE_HOURS
         value: "24"
+      - key: PRICE_SYNC_SCHEDULER_ENABLED
+        value: "false"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: FAST_BROQUEL_AI_MODEL
+        value: "gemini-2.5-flash-lite"
       # Set this to your Netlify domain before deploying, e.g.:
       # value: "https://your-site.netlify.app"
       - key: ALLOWED_ORIGINS

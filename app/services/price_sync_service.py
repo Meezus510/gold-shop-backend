@@ -115,7 +115,11 @@ def get_or_create_config(db: Session) -> PriceSyncConfig:
     return config
 
 
-def record_sync(db: Session, items_updated: int, next_sync_at: datetime) -> PriceSyncConfig:
+def record_sync(
+    db: Session,
+    items_updated: int,
+    next_sync_at: datetime | None,
+) -> PriceSyncConfig:
     config = get_or_create_config(db)
     config.last_sync_at      = datetime.now(timezone.utc)
     config.next_sync_at      = next_sync_at

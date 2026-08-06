@@ -26,6 +26,10 @@ def _recompute_status(item: Item) -> None:
         item.status = ItemStatus.AVAILABLE
     elif item.quantity_pending > 0:
         item.status = ItemStatus.SALE_PENDING
+    elif item.quantity_sold > 0:
+        item.status = ItemStatus.SOLD
+    elif item.quantity_returned_to_vendor > 0:
+        item.status = ItemStatus.RETURNED_TO_VENDOR
     else:
         item.status = ItemStatus.SOLD
 

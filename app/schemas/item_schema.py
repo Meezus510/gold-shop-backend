@@ -108,9 +108,9 @@ class ItemVisibilityUpdate(BaseModel):
 # ── Unit adjustment (multi-quantity items) ────────────────────────────────────
 
 class UnitAdjust(BaseModel):
-    """Move `units` items between available / pending / sold buckets."""
-    from_state: Literal["available", "pending", "sold"]
-    to_state:   Literal["available", "pending", "sold"]
+    """Move units between inventory outcome buckets."""
+    from_state: Literal["available", "pending", "sold", "returned_to_vendor"]
+    to_state:   Literal["available", "pending", "sold", "returned_to_vendor"]
     units:      int = Field(default=1, ge=1)
 
     @model_validator(mode="after")
@@ -139,12 +139,15 @@ class ItemAdminOut(BaseModel):
     quantity_available: int = 0
     quantity_pending:   int = 0
     quantity_sold:      int = 0
+    quantity_returned_to_vendor: int = 0
 
     markup_flat:       Decimal | None = None
     markup_loan:       Decimal | None = None
     listed_price_flat: Decimal | None = None
     listed_price_loan: Decimal | None = None
     sell_price:        Decimal | None = None   # actual price sold for
+    vendor_refund_amount: Decimal | None = None
+    returned_to_vendor_at: datetime | None = None
 
     purchase_location: PurchaseLocationOut | None = None
     is_visible: bool = True
