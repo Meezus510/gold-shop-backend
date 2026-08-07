@@ -387,6 +387,20 @@ def update_item(db: Session, item_id: int, data: ItemUpdate) -> Item:
     return item
 
 
+def replace_primary_image(db: Session, item_id: int, image_url: str) -> Item:
+    """Replace only an item's primary photo, preserving any gallery photos."""
+    item = _get_item_or_404(db, item_id)
+
+    if item.images:
+        item.images[0].url = image_url
+    else:
+        db.add(ItemImage(item_id=item.item_id, url=image_url, position=0))
+
+    db.commit()
+    db.refresh(item)
+    return item
+
+
 def delete_item(db: Session, item_id: int) -> None:
     item = _get_item_or_404(db, item_id)
     db.delete(item)

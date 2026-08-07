@@ -108,6 +108,39 @@ def admin_update_item(
     return item_service.update_item(db, item_id, data)
 
 
+@router.post("/items/{item_id}/primary-image", response_model=ItemAdminOut)
+async def admin_replace_primary_image(
+    item_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _: Admin = Depends(get_current_admin),
+):
+    """Upload and immediately assign a new primary photo to one item."""
+    if not any((file.content_type or '').startswith(t) for t in ALLOWED_TYPES):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported file type: {file.content_type}. Use JPEG, PNG, or WEBP.",
+        )
+
+    contents = await file.read()
+    if len(contents) > MAX_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Image must be under 10 MB.",
+        )
+
+    try:
+        url = upload_image(contents, file.filename or "replacement")
+    except Exception as exc:
+        logger.error("Primary image upload failed for item %s: %s", item_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Image upload failed. Please try again.",
+        )
+
+    return item_service.replace_primary_image(db, item_id, url)
+
+
 @router.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
 def admin_delete_item(
     item_id: int,
