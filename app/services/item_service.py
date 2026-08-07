@@ -13,6 +13,12 @@ from app.models.metal_model import Metal
 from app.schemas.item_schema import ItemCreate, ItemPublicOut, ItemUpdate, UnitAdjust
 from app.schemas.translation_schema import TranslationCreate
 from app.services.item_number_service import item_number_prefix, next_item_number
+from app.services.image_enhancement_service import (
+    build_unique_enhanced_url,
+    effective_image_url,
+    get_or_create_settings,
+    item_is_eligible,
+)
 from app.services.pricing_service import compute_listed_prices
 
 
@@ -86,7 +92,15 @@ def _ensure_item_number_available(
 def _replace_images(db: Session, item: Item, urls: List[str]):
     db.query(ItemImage).filter(ItemImage.item_id == item.item_id).delete()
     for position, url in enumerate(urls):
-        db.add(ItemImage(item_id=item.item_id, url=url, position=position))
+        db.add(ItemImage(
+            item_id=item.item_id,
+            url=url,
+            enhanced_url=(
+                build_unique_enhanced_url(db, url, item.item_id)
+                if item_is_eligible(item) else None
+            ),
+            position=position,
+        ))
 
 
 def _compute_metal_listed_prices(db: Session, item: Item) -> tuple[Decimal | None, Decimal | None]:
@@ -172,17 +186,21 @@ def _set_whole_item_status(
     _sync_vendor_return_fields(item)
 
 
-def _primary_image_url(item: Item) -> str | None:
-    return item.images[0].url if item.images else None
+def _primary_image_url(item: Item, global_enhanced: bool) -> str | None:
+    return (
+        effective_image_url(item.images[0], item, global_enhanced)
+        if item.images else None
+    )
 
 
-def _image_url_list(item: Item) -> List[str]:
-    return [img.url for img in item.images]
+def _image_url_list(item: Item, global_enhanced: bool) -> List[str]:
+    return [effective_image_url(img, item, global_enhanced) for img in item.images]
 
 
 # ── Public ────────────────────────────────────────────────────────────────────
 
 def get_public_items(db: Session, lang: str) -> List[ItemPublicOut]:
+    global_enhanced = get_or_create_settings(db).use_enhanced_images
     items = (
         db.query(Item)
         .filter(Item.is_visible == True)  # noqa: E712
@@ -204,8 +222,8 @@ def get_public_items(db: Session, lang: str) -> List[ItemPublicOut]:
             listed_price_flat=item.listed_price_flat,
             listed_price_loan=item.listed_price_loan,
             price=item.listed_price_flat,   # backward-compat alias
-            image_url=_primary_image_url(item),
-            images=_image_url_list(item),
+            image_url=_primary_image_url(item, global_enhanced),
+            images=_image_url_list(item, global_enhanced),
             status=item.status,
             metal=item.metal,
             purity_karat=item.purity_karat,
@@ -219,6 +237,7 @@ def get_public_item(db: Session, item_id: int, lang: str) -> ItemPublicOut:
     if not item.is_visible:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
     t = _resolve_translation(item, lang)
+    global_enhanced = get_or_create_settings(db).use_enhanced_images
     return ItemPublicOut(
         item_id=item.item_id,
         item_number_prefix=item.item_number_prefix,
@@ -231,8 +250,8 @@ def get_public_item(db: Session, item_id: int, lang: str) -> ItemPublicOut:
         listed_price_flat=item.listed_price_flat,
         listed_price_loan=item.listed_price_loan,
         price=item.listed_price_flat,
-        image_url=_primary_image_url(item),
-        images=_image_url_list(item),
+        image_url=_primary_image_url(item, global_enhanced),
+        images=_image_url_list(item, global_enhanced),
         status=item.status,
         metal=item.metal,
         purity_karat=item.purity_karat,
@@ -295,7 +314,12 @@ def create_item(db: Session, data: ItemCreate) -> Item:
         ))
 
     for position, url in enumerate(data.image_urls):
-        db.add(ItemImage(item_id=item.item_id, url=url, position=position))
+        db.add(ItemImage(
+            item_id=item.item_id,
+            url=url,
+            enhanced_url=build_unique_enhanced_url(db, url, item.item_id),
+            position=position,
+        ))
 
     db.commit()
     db.refresh(item)
@@ -393,8 +417,20 @@ def replace_primary_image(db: Session, item_id: int, image_url: str) -> Item:
 
     if item.images:
         item.images[0].url = image_url
+        item.images[0].enhanced_url = (
+            build_unique_enhanced_url(db, image_url, item.item_id)
+            if item_is_eligible(item) else None
+        )
     else:
-        db.add(ItemImage(item_id=item.item_id, url=image_url, position=0))
+        db.add(ItemImage(
+            item_id=item.item_id,
+            url=image_url,
+            enhanced_url=(
+                build_unique_enhanced_url(db, image_url, item.item_id)
+                if item_is_eligible(item) else None
+            ),
+            position=0,
+        ))
 
     db.commit()
     db.refresh(item)

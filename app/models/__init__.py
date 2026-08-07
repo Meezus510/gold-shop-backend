@@ -8,3 +8,4 @@ from app.models.purchase_location_model import PurchaseLocation  # noqa: F401
 from app.models.price_sync_model import PriceSyncConfig  # noqa: F401
 from app.models.customer_model import Customer  # noqa: F401
 from app.models.purchase_request_model import PurchaseRequest  # noqa: F401
+from app.models.catalog_setting_model import CatalogSetting  # noqa: F401

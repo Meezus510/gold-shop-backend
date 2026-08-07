@@ -77,8 +77,10 @@ async def lifespan(_: FastAPI):
     run_startup_migrations(engine)
 
     from app.services import scheduler_service
+    from app.services import image_enhancement_service
     db = SessionLocal()
     try:
+        image_enhancement_service.backfill_existing_images(db)
         scheduler_service.start(db)
     finally:
         db.close()

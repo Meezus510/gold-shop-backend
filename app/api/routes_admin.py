@@ -8,8 +8,13 @@ from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.models.admin_model import Admin
 from app.schemas.admin_schema import AdminLogin, TokenOut
+from app.schemas.image_enhancement_schema import (
+    ImageEnhancementSettingOut,
+    ImageEnhancementSettingUpdate,
+    ItemImageEnhancementUpdate,
+)
 from app.schemas.item_schema import ItemAdminOut, ItemCreate, ItemStatusUpdate, ItemUpdate, ItemVisibilityUpdate, UnitAdjust
-from app.services import item_service
+from app.services import image_enhancement_service, item_service
 from app.services.auth_service import get_current_admin
 from app.services.cloudinary_service import upload_image
 from app.utils.limiter import limiter
@@ -89,6 +94,23 @@ def admin_list_items(
     return db.query(Item).order_by(Item.created_at.desc()).all()
 
 
+@router.get("/image-enhancement-settings", response_model=ImageEnhancementSettingOut)
+def admin_get_image_enhancement_settings(
+    db: Session = Depends(get_db),
+    _: Admin = Depends(get_current_admin),
+):
+    return image_enhancement_service.enhancement_stats(db)
+
+
+@router.patch("/image-enhancement-settings", response_model=ImageEnhancementSettingOut)
+def admin_update_image_enhancement_settings(
+    data: ImageEnhancementSettingUpdate,
+    db: Session = Depends(get_db),
+    _: Admin = Depends(get_current_admin),
+):
+    return image_enhancement_service.set_global_enabled(db, data.global_enabled)
+
+
 @router.post("/items", response_model=ItemAdminOut, status_code=status.HTTP_201_CREATED)
 def admin_create_item(
     data: ItemCreate,
@@ -139,6 +161,16 @@ async def admin_replace_primary_image(
         )
 
     return item_service.replace_primary_image(db, item_id, url)
+
+
+@router.patch("/items/{item_id}/image-enhancement", response_model=ItemAdminOut)
+def admin_update_item_image_enhancement(
+    item_id: int,
+    data: ItemImageEnhancementUpdate,
+    db: Session = Depends(get_db),
+    _: Admin = Depends(get_current_admin),
+):
+    return image_enhancement_service.set_item_enabled(db, item_id, data.enabled)
 
 
 @router.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)

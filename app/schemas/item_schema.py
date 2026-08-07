@@ -151,6 +151,7 @@ class ItemAdminOut(BaseModel):
 
     purchase_location: PurchaseLocationOut | None = None
     is_visible: bool = True
+    use_enhanced_image: bool = False
     images:      List[ItemImageOut] = []
     status:      ItemStatus
     created_at:  datetime

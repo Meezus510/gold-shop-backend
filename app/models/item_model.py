@@ -65,6 +65,7 @@ class Item(Base):
 
     purchase_location_id = Column(Integer, ForeignKey("purchase_locations.id"), nullable=True)
     is_visible = Column(Boolean, nullable=False, default=False)
+    use_enhanced_image = Column(Boolean, nullable=False, default=False)
     status     = Column(Enum(ItemStatus), nullable=False, default=ItemStatus.AVAILABLE)
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
