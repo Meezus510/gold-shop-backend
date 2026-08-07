@@ -38,6 +38,16 @@ def cloudinary_asset_key(url: str | None) -> str | None:
     return asset.rsplit(".", 1)[0] if "." in asset.rsplit("/", 1)[-1] else asset
 
 
+def duplicate_asset_keys(db: Session) -> set[str]:
+    """Return Cloudinary assets referenced by more than one inventory image."""
+    keys = [
+        key
+        for (url,) in db.query(ItemImage.url).all()
+        if (key := cloudinary_asset_key(url))
+    ]
+    return {key for key, count in Counter(keys).items() if count > 1}
+
+
 def build_enhanced_url(original_url: str | None) -> str | None:
     """Build a reversible Cloudinary delivery URL; the original asset is untouched."""
     if not original_url or "/image/upload/" not in original_url:
@@ -132,9 +142,7 @@ def set_item_enabled(db: Session, item_id: int, enabled: bool) -> Item:
 def backfill_existing_images(db: Session) -> int:
     """Create enhanced delivery URLs for unique, non-terminal inventory photos."""
     images = db.query(ItemImage).join(Item).all()
-    key_counts = Counter(
-        key for key in (cloudinary_asset_key(image.url) for image in images) if key
-    )
+    duplicate_keys = duplicate_asset_keys(db)
     updated = 0
     for image in images:
         key = cloudinary_asset_key(image.url)
@@ -142,7 +150,7 @@ def backfill_existing_images(db: Session) -> int:
             image.enhanced_url
             or not item_is_eligible(image.item)
             or not key
-            or key_counts[key] != 1
+            or key in duplicate_keys
         ):
             continue
         image.enhanced_url = build_enhanced_url(image.url)

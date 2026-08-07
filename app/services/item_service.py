@@ -15,6 +15,8 @@ from app.schemas.translation_schema import TranslationCreate
 from app.services.item_number_service import item_number_prefix, next_item_number
 from app.services.image_enhancement_service import (
     build_unique_enhanced_url,
+    cloudinary_asset_key,
+    duplicate_asset_keys,
     effective_image_url,
     get_or_create_settings,
     item_is_eligible,
@@ -186,21 +188,45 @@ def _set_whole_item_status(
     _sync_vendor_return_fields(item)
 
 
-def _primary_image_url(item: Item, global_enhanced: bool) -> str | None:
+def _public_image_url(
+    item: Item,
+    image: ItemImage,
+    global_enhanced: bool,
+    duplicate_keys: set[str],
+) -> str | None:
+    if cloudinary_asset_key(image.url) in duplicate_keys:
+        return None
+    return effective_image_url(image, item, global_enhanced)
+
+
+def _primary_image_url(
+    item: Item,
+    global_enhanced: bool,
+    duplicate_keys: set[str],
+) -> str | None:
     return (
-        effective_image_url(item.images[0], item, global_enhanced)
+        _public_image_url(item, item.images[0], global_enhanced, duplicate_keys)
         if item.images else None
     )
 
 
-def _image_url_list(item: Item, global_enhanced: bool) -> List[str]:
-    return [effective_image_url(img, item, global_enhanced) for img in item.images]
+def _image_url_list(
+    item: Item,
+    global_enhanced: bool,
+    duplicate_keys: set[str],
+) -> List[str]:
+    urls = [
+        _public_image_url(item, image, global_enhanced, duplicate_keys)
+        for image in item.images
+    ]
+    return [url for url in urls if url]
 
 
 # ── Public ────────────────────────────────────────────────────────────────────
 
 def get_public_items(db: Session, lang: str) -> List[ItemPublicOut]:
     global_enhanced = get_or_create_settings(db).use_enhanced_images
+    duplicates = duplicate_asset_keys(db)
     items = (
         db.query(Item)
         .filter(Item.is_visible == True)  # noqa: E712
@@ -222,8 +248,8 @@ def get_public_items(db: Session, lang: str) -> List[ItemPublicOut]:
             listed_price_flat=item.listed_price_flat,
             listed_price_loan=item.listed_price_loan,
             price=item.listed_price_flat,   # backward-compat alias
-            image_url=_primary_image_url(item, global_enhanced),
-            images=_image_url_list(item, global_enhanced),
+            image_url=_primary_image_url(item, global_enhanced, duplicates),
+            images=_image_url_list(item, global_enhanced, duplicates),
             status=item.status,
             metal=item.metal,
             purity_karat=item.purity_karat,
@@ -238,6 +264,7 @@ def get_public_item(db: Session, item_id: int, lang: str) -> ItemPublicOut:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
     t = _resolve_translation(item, lang)
     global_enhanced = get_or_create_settings(db).use_enhanced_images
+    duplicates = duplicate_asset_keys(db)
     return ItemPublicOut(
         item_id=item.item_id,
         item_number_prefix=item.item_number_prefix,
@@ -250,8 +277,8 @@ def get_public_item(db: Session, item_id: int, lang: str) -> ItemPublicOut:
         listed_price_flat=item.listed_price_flat,
         listed_price_loan=item.listed_price_loan,
         price=item.listed_price_flat,
-        image_url=_primary_image_url(item, global_enhanced),
-        images=_image_url_list(item, global_enhanced),
+        image_url=_primary_image_url(item, global_enhanced, duplicates),
+        images=_image_url_list(item, global_enhanced, duplicates),
         status=item.status,
         metal=item.metal,
         purity_karat=item.purity_karat,
