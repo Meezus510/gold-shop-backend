@@ -11,6 +11,7 @@ from app.schemas.fast_broquel_schema import FastBroquelAnalysis
 logger = logging.getLogger(__name__)
 
 _API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+_FALLBACK_MODEL = "gemini-3.1-flash-lite"
 
 
 def analyze_broquel_image(image_bytes: bytes, content_type: str) -> FastBroquelAnalysis:
@@ -47,15 +48,29 @@ def analyze_broquel_image(image_bytes: bytes, content_type: str) -> FastBroquelA
         },
     }
 
+    headers = {
+        "x-goog-api-key": settings.GEMINI_API_KEY,
+        "Content-Type": "application/json",
+    }
+    model = settings.FAST_BROQUEL_AI_MODEL
     response = requests.post(
-        _API_URL.format(model=settings.FAST_BROQUEL_AI_MODEL),
-        headers={
-            "x-goog-api-key": settings.GEMINI_API_KEY,
-            "Content-Type": "application/json",
-        },
+        _API_URL.format(model=model),
+        headers=headers,
         json=payload,
         timeout=30,
     )
+    if response.status_code == 404 and model != _FALLBACK_MODEL:
+        logger.warning(
+            "Configured Gemini model %s is unavailable; retrying with %s",
+            model,
+            _FALLBACK_MODEL,
+        )
+        response = requests.post(
+            _API_URL.format(model=_FALLBACK_MODEL),
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
     response.raise_for_status()
     body = response.json()
     try:

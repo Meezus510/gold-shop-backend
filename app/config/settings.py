@@ -42,7 +42,7 @@ class Settings(BaseSettings):
 
     # Low-cost vision model used by the fast Broqueles intake flow.
     GEMINI_API_KEY: str = ""
-    FAST_BROQUEL_AI_MODEL: str = "gemini-2.5-flash-lite"
+    FAST_BROQUEL_AI_MODEL: str = "gemini-3.1-flash-lite"
 
     # Customer PII encryption. Set this to a Fernet key in production:
     # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
